@@ -1,14 +1,14 @@
-# Pogobot developer notes
+# Pogobot documentation map
 
-These notes summarize the repository as it exists in the checked-out working
-tree. They complement, rather than replace, the user-facing documentation.
-
-- [Software current state](current_state.md): architecture, build and boot
-  flow, hardware targets, public API, auxiliary applications, and known review
-  items.
-- [Software README](../Software/readme.md): original expert-mode installation
-  and programming instructions.
-- [SDK README](../Software/sdk/Readme.md): standalone SDK setup and use.
-- [Generated API documentation](../pogodocs.md): public `pogolib` API reference.
-- [SDK 2.7 release notes](../Software/SDK_2_7.md): changes on the currently
-  checked-out development branch.
+- [Current repository state](current_state.md): inspected areas, established
+  behavior, open questions, ongoing work, decisions, data limits, and next tasks.
+- [Software architecture notes](software_architecture.md): detailed source
+  survey and review items from the 2026-09-14 checkout.
+- [IR upload reliability plan](ir_upload_reliability_plan.md): phased changes
+  for robust firmware uploads through the Pogowall or Pogoshower.
+- [Project README](../README.md) and [hardware guide](../Hardware/readme.md):
+  robot overview, schematics, parts, and accessories.
+- [Expert software guide](../Software/readme.md), [SDK guide](../Software/sdk/Readme.md),
+  and [IR remote guide](../readme-irRemote.md): build and operating workflows.
+- [API reference](../pogodocs.md) and [SDK 2.7 notes](../Software/SDK_2_7.md):
+  application functions and release changes.

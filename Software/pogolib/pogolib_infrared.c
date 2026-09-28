@@ -49,6 +49,8 @@ const slip_send_descriptor_s slip_send_descriptor = {
 static message_t bufmem_mes[NUMEL];
 Messagefifo my_mes_fifo;
 Messagefifo *my_mes_fifo_p = &my_mes_fifo;
+static uint32_t queue_drop_count;
+static uint32_t malformed_message_count;
 
 /* ******************************** ******************************** */
 
@@ -59,6 +61,8 @@ pogobot_infrared_ll_init( void )
     _master_mute = 0;
 
     FifoBuffer_init( my_mes_fifo_p, NUMEL, message_t, bufmem_mes );
+    queue_drop_count = 0;
+    malformed_message_count = 0;
 
     slip_send_init( &slip_send_descriptor );
 
@@ -101,6 +105,18 @@ void
 pogobot_infrared_clear_message_queue( void )
 {
     FifoBuffer_flush( my_mes_fifo_p );
+}
+
+uint32_t
+pogobot_infrared_get_queue_drop_count( void )
+{
+    return queue_drop_count;
+}
+
+uint32_t
+pogobot_infrared_get_malformed_count( void )
+{
+    return malformed_message_count;
 }
 
 /**
@@ -352,6 +368,12 @@ void
 on_complete_valid_slip_packet_received( uint8_t *data, uint32_t size,
                                         void *tag )
 {
+    // The decoder has removed the CRC-32; two trailing bytes encode payload size.
+    if (size < sizeof(message_short_header_t) + 2) {
+        malformed_message_count++;
+        return;
+    }
+
     // double verification of payload size
     // the double is placed inside the 2 last bytes of the received data 
     uint16_t d_payload_size = 0;
@@ -373,8 +395,9 @@ on_complete_valid_slip_packet_received( uint8_t *data, uint32_t size,
 
         //printf("payload_size = %d\n", m.header.payload_length);
 
-        if (ms->header.payload_length <= MAX_PAYLOAD_SIZE_BYTES && ms->header.payload_length == d_payload_size)
-        {
+        if (ms->header.payload_length <= MAX_PAYLOAD_SIZE_BYTES &&
+            ms->header.payload_length == d_payload_size &&
+            size == sizeof(message_short_header_t) + ms->header.payload_length + 2) {
             //printf("double verif ok \n");
             memcpy( m.payload, ms->payload, m.header.payload_length);
 
@@ -382,16 +405,32 @@ on_complete_valid_slip_packet_received( uint8_t *data, uint32_t size,
             if ( !FifoBuffer_is_full( my_mes_fifo_p ) )
             {
                 FifoBuffer_write( my_mes_fifo_p, m );
+            } else {
+                queue_drop_count++;
             }
+        } else {
+            malformed_message_count++;
         }
 
     } else {
+        if (size < sizeof(message_header_t) + 2) {
+            malformed_message_count++;
+            return;
+        }
+
         message_t *m = (message_t *)( data );
         m->header._receiver_ir_index = (int)tag;
         // printf("new message from %d \n", m->header._receiver_ir_index);
 
-        // filter mesage from type ir_t_cmd (command message)
-        if ( m->header._packet_type == ir_t_cmd)
+        if (m->header.payload_length > MAX_PAYLOAD_SIZE_BYTES ||
+            m->header.payload_length != d_payload_size ||
+            size != sizeof(message_header_t) + m->header.payload_length + 2) {
+            malformed_message_count++;
+            return;
+        }
+
+        // A command may change robot state only after its full payload is validated.
+        if ( m->header._packet_type == ir_t_cmd && m->header.payload_length >= 8)
         {
             //if stop message reboot on pogobios
             int ret = strncmp("DEADBEEF", (char*)(m->payload), 8);
@@ -419,14 +458,12 @@ on_complete_valid_slip_packet_received( uint8_t *data, uint32_t size,
 
         //printf("payload_size = %d\n", m->header.payload_length);
 
-        if (m->header.payload_length == d_payload_size)
+        /* when a message arrives, it is put into the FIFO */
+        if ( !FifoBuffer_is_full( my_mes_fifo_p ) )
         {
-            //printf("double verif ok \n");
-            /* when a message arrives, it is put into the FIFO */
-            if ( !FifoBuffer_is_full( my_mes_fifo_p ) )
-            {
-                FifoBuffer_write( my_mes_fifo_p, *m );
-            }
+            FifoBuffer_write( my_mes_fifo_p, *m );
+        } else {
+            queue_drop_count++;
         }
         
     }

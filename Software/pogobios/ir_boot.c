@@ -27,57 +27,93 @@
 #include <pogobot.h>
 
 #define NB_MISSING_ADDR 10
+// IR uploads occupy the current gateware and firmware slots, ending before the validity marker.
+#define IR_FLASH_START 0x40000u
+#define IR_FLASH_END 0x80000u
 
-static unsigned int success_addr, ptr;
+static uint32_t next_addr;
 const char * ir_magic_req = IR_MAGIC_REQ;
-static int missing_packet = 0;
-static unsigned int recovered_packet = 0;
+static uint32_t missing_addr[NB_MISSING_ADDR];
+static uint32_t missing_total;
+static uint8_t missing_count;
+static uint8_t chunk_size;
+// The 256 KiB upload window contains 64 sectors; track each erase independently.
+static uint8_t erased_sectors[((IR_FLASH_END - IR_FLASH_START) /
+                               SPIFLASH_SECTOR_SIZE + 7) / 8];
+static uint8_t flash_state_partial;
+static uint8_t partial_known;
+static uint8_t started;
+static uint8_t transfer_error;
 
-static unsigned int l_missing_packet[NB_MISSING_ADDR];
-static uint8_t ptr_l_missing_packet = 0;
+static struct {
+    uint32_t frames;
+    uint32_t accepted;
+    uint32_t duplicates;
+    uint32_t malformed;
+    uint32_t crc_errors;
+    uint32_t gaps;
+    uint32_t erases;
+    uint32_t erase_us;
+    uint32_t write_us;
+} upload_stats;
 
-static int flash_state_partial = 0;
-
-static void add_to_missing_list(unsigned int addr) {
-
-    if (ptr_l_missing_packet >= NB_MISSING_ADDR-1) {
-        return;
+static int missing_index(uint32_t addr)
+{
+    for (uint8_t i = 0; i < missing_count; i++) {
+        if (missing_addr[i] == addr)
+            return i;
     }
-    printf("adding %x at ptr %d\n", addr, ptr_l_missing_packet);
-    l_missing_packet[ptr_l_missing_packet] = addr;
-    ptr_l_missing_packet += 1;
-
-    return;
+    return -1;
 }
 
-static uint8_t in_missing_list (unsigned int addr) {
+static void record_gap(uint32_t from, uint32_t to, uint32_t chunk_size)
+{
+    // Keep a bounded repair list; an overflow makes this transfer incomplete.
+    uint32_t count = (to - from) / chunk_size;
+    uint32_t available = NB_MISSING_ADDR - missing_count;
+    uint32_t retained = count < available ? count : available;
 
-    for (int i = 0; i < ptr_l_missing_packet; i++)
-    {
-        if (addr == l_missing_packet[i])
-        {
-            printf("found missing addr : %x\n", addr);
-            return 1;
-        }
-    }
+    for (uint32_t i = 0; i < retained; i++)
+        missing_addr[missing_count++] = from + i * chunk_size;
 
-    return 0;
-
+    missing_total += count;
+    upload_stats.gaps += count;
+    if (retained != count)
+        transfer_error = 1;
 }
 
-static void print_missing_list (void) {
-
-    printf("mssing list addr : ");
-
-    for (int i = 0; i < ptr_l_missing_packet; i++)
-    {
-        printf("%x\t", l_missing_packet[i]);
-    }
-
+static void print_missing_list(void)
+{
+    printf("Missing addresses:");
+    for (uint8_t i = 0; i < missing_count; i++)
+        printf(" %lx", (unsigned long)missing_addr[i]);
     printf("\n");
+}
 
-    return;
+static void time_erase_marker(void)
+{
+    time_reference_t timer;
+    pogobot_stopwatch_reset(&timer);
+    spiBeginErase4(FLASH_OK_OFFSET);
+    upload_stats.erase_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    upload_stats.erases++;
+}
 
+static void time_erase_sector(uint32_t addr)
+{
+    time_reference_t timer;
+    pogobot_stopwatch_reset(&timer);
+    erase_flash_sector(addr);
+    upload_stats.erase_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    upload_stats.erases++;
+}
+
+static void time_write(uint32_t addr, unsigned char *data, uint32_t length)
+{
+    time_reference_t timer;
+    pogobot_stopwatch_reset(&timer);
+    write_to_flash(addr, data, length);
+    upload_stats.write_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
 }
 
 uint8_t check_crc(struct sfl_frame* frame) {
@@ -95,7 +131,7 @@ void print_frame(struct sfl_frame* frame) {
     printf("size: 0x%02x\n", frame->payload_length);
     printf("crc: 0x%04x\n", ((int)frame->crc[0] << 8)|(int)frame->crc[1]);
     printf("cmd: 0x%02x\ndata:", frame->cmd);
-    addr = get_uint32(&frame->payload[0]);
+    addr = frame->payload_length >= 4 ? get_uint32(&frame->payload[0]) : 0;
     for( i=4; i<frame->payload_length; i++ ) {
         if( (i-4)%16 == 0 ) {
             printf("\n%08lx ", addr+i-4);
@@ -110,158 +146,268 @@ void print_frame(struct sfl_frame* frame) {
     printf("\n");
 }
 
-static unsigned int exec_frame_cmd(struct sfl_frame* frame)
+static uint8_t exec_frame_cmd(struct sfl_frame *frame)
 {
-    unsigned int addr=0;
-    char * flash_ok = FLASH_IS_OK;
-    char * flash_par = FLASH_IS_PARTIAL;
+    uint32_t addr;
+    uint32_t offset;
+    uint32_t length;
+    int recovered;
 
-    //printf("m %d, r %d, p %d\n", missing_packet, recovered_packet, ptr_l_missing_packet);
+    switch (frame->cmd) {
+    case SFL_CMD_ABORT:
+        time_erase_marker();
+        missing_count = 0;
+        missing_total = 0;
+        partial_known = 0;
+        started = 0;
+        printf("IR transfer aborted\n");
+        return 1;
 
-	/* Execute Frame CMD and return flashed address (or reboot) */
-	switch(frame->cmd) {
-        case SFL_CMD_ABORT:
-            printf("transfert abord!! \n");
-            missing_packet = 0xFFFFFF;
-
-		case SFL_CMD_LOAD:
-			addr = get_uint32(&frame->payload[0]);
-			// Check if we try to write to flash, and not overwrite the bootloader
-			if( (addr >= SPIFLASH_BASE+0x40000) & (addr < SPIFLASH_BASE+SPIFLASH_SIZE) ) {
-                addr -= SPIFLASH_BASE; // addr is now just the offset in flash
-                if ((flash_state_partial && in_missing_list(addr)) || !flash_state_partial) {   
-                    // Flash only if not already flashed before (duplicated messages)  
-                    if(addr != success_addr) {
-                        success_addr = addr;
-                        // Only erase if address is on a sector boundary.
-                        if ((addr & ~(SPIFLASH_SECTOR_SIZE - 1) ) == addr) {
-                            printf("Erasing sector 0x%" PRIxPTR "\n", addr);
-                            erase_flash_sector(addr);
-                            ptr = addr;
-                            if((addr == 0x40000) | ( addr == 0x60000 )) { 
-                                printf("Erasing flashOK flag\n");
-                                spiBeginErase4(FLASH_OK_OFFSET);
-                            }
-                        }
-                        if( ptr != addr && !flash_state_partial) {
-                            printf("Error : Non contiguous flashing, expected: %" PRIxPTR ", actual address: %" PRIxPTR "\n", ptr, addr);
-                            for( unsigned int m_addr = ptr; m_addr < addr; m_addr += frame->payload_length - 4) {
-                                add_to_missing_list(m_addr);
-                                missing_packet++;
-                            }
-                        }
-                        if (flash_state_partial)
-                        {
-                            printf("Recovered addr: %" PRIxPTR "\n", addr);
-                            recovered_packet ++;
-                        }
-                        
-                        write_to_flash(addr, (unsigned char *)&frame->payload[4], frame->payload_length - 4);
-                        ptr=addr+frame->payload_length - 4;  // Should be the next address to flash
-                        //printf("Flashed address %08x\n", addr);
-                    }
-                } 
-			}
+    case SFL_CMD_LOAD:
+        if (frame->payload_length <= 4) {
+            upload_stats.malformed++;
+            transfer_error = 1;
             break;
-			
-		case SFL_CMD_JUMP: 
+        }
+        addr = get_uint32(&frame->payload[0]);
+        length = frame->payload_length - 4;
+        if (addr < SPIFLASH_BASE) {
+            upload_stats.malformed++;
+            transfer_error = 1;
+            break;
+        }
+        offset = addr - SPIFLASH_BASE;
+        if (offset < IR_FLASH_START || offset >= IR_FLASH_END ||
+            offset >= SPIFLASH_SIZE || length > IR_FLASH_END - offset ||
+            length > SPIFLASH_SIZE - offset) {
+            upload_stats.malformed++;
+            transfer_error = 1;
+            break;
+        }
 
-
-            printf("jump m %d, r %d\n", missing_packet, recovered_packet);
-            
-            //erase the "flash is ok" token
-    		spiBeginErase4(FLASH_OK_OFFSET);
-            missing_packet -= recovered_packet;
-            recovered_packet = 0;
-
-            if (missing_packet > 0 && missing_packet < NB_MISSING_ADDR)
-            {
-                printf("missing %d packets\n", missing_packet);
-                print_missing_list();
-                /* Flash partially, write magic value */
-                write_to_flash(FLASH_OK_OFFSET, (unsigned char *)flash_par, strlen(flash_par));
-                return 1;
-            } else if (missing_packet > NB_MISSING_ADDR) {
-                printf(" too many missing packets (%d)\n", missing_packet);
-                print_missing_list();
-                return 1;
+        if (flash_state_partial) {
+            recovered = missing_index(offset);
+            if (recovered < 0) {
+                upload_stats.duplicates++;
+                break;
             }
-            if (missing_packet < 0) {
-                printf("something strange just happened !\n");
+            if (length != chunk_size) {
+                upload_stats.malformed++;
+                transfer_error = 1;
+                break;
             }
-            /* Flash successful, write magic value */
-            write_to_flash(FLASH_OK_OFFSET, (unsigned char *)flash_ok, strlen(flash_ok));
-            // no reboot on the code, we wait for a start command. 
-            missing_packet = 0;
-            ptr_l_missing_packet = 0;
-			break;
+        } else if (!started) {
+            // Without an image manifest, a fresh transfer must start at a known slot base.
+            if (offset != IR_FLASH_START && offset != 0x60000u) {
+                upload_stats.malformed++;
+                transfer_error = 1;
+                break;
+            }
+            started = 1;
+            next_addr = offset;
+            chunk_size = length;
+            time_erase_marker();
+            recovered = -1;
+        } else if (offset < next_addr) {
+            recovered = missing_index(offset);
+            if (recovered < 0) {
+                upload_stats.duplicates++;
+                break;
+            }
+            if (length != chunk_size) {
+                upload_stats.malformed++;
+                transfer_error = 1;
+                break;
+            }
+        } else {
+            recovered = -1;
+        }
 
-		default:
-			printf("CMD not recognized: %d\n", frame->cmd);
-			break;
-	}
+        if (recovered < 0 && offset > next_addr) {
+            uint32_t gap = offset - next_addr;
+            // The legacy stream has no length metadata for missing frames.
+            // Its first data frame determines the only recoverable gap stride.
+            if (gap % chunk_size != 0) {
+                upload_stats.malformed++;
+                transfer_error = 1;
+                break;
+            }
+            record_gap(next_addr, offset, chunk_size);
+        }
+
+        if (!flash_state_partial) {
+            // Erase each touched sector once, even when its boundary packet was lost.
+            uint32_t sector = (offset - IR_FLASH_START) / SPIFLASH_SECTOR_SIZE;
+            uint8_t bit = 1u << (sector & 7u);
+            if (!(erased_sectors[sector >> 3] & bit)) {
+                time_erase_sector(offset & ~(SPIFLASH_SECTOR_SIZE - 1));
+                erased_sectors[sector >> 3] |= bit;
+            }
+        }
+
+        time_write(offset, &frame->payload[4], length);
+        upload_stats.accepted++;
+        if (recovered >= 0) {
+            missing_addr[recovered] = missing_addr[--missing_count];
+            missing_total--;
+        } else {
+            next_addr = offset + length;
+        }
+        break;
+
+    case SFL_CMD_JUMP:
+        time_erase_marker();
+        if (!started || transfer_error || missing_total != 0) {
+            printf("IR upload incomplete: %lu missing chunks%s\n",
+                   (unsigned long)missing_total,
+                   transfer_error ? ", transfer error" : "");
+            if (missing_count)
+                print_missing_list();
+            if (started && !transfer_error && missing_total == missing_count &&
+                missing_total <= NB_MISSING_ADDR) {
+                time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_PARTIAL,
+                           strlen(FLASH_IS_PARTIAL));
+                flash_state_partial = 1;
+                partial_known = 1;
+            } else {
+                partial_known = 0;
+            }
+            return 1;
+        }
+        time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_OK,
+                   strlen(FLASH_IS_OK));
+        missing_count = 0;
+        missing_total = 0;
+        partial_known = 0;
+        printf("IR upload complete\n");
+        return 1;
+
+    default:
+        upload_stats.malformed++;
+        transfer_error = 1;
+        break;
+    }
     return 0;
 }
 
 void ir_boot_loop(void) {
     time_reference_t mytimer;
-    uint32_t timeout = 2000000;  // in microseconds
+    const uint32_t timeout = 2000000;  // in microseconds
     struct sfl_frame * frame;
     message_t msg;
-    missing_packet = 0;
-    success_addr=0;
+    slip_error_counter_s slip_start[IR_RX_COUNT];
+    uint32_t ring_drop_start[IR_RX_COUNT];
+    uint32_t queue_drop_start;
+    uint32_t malformed_start;
+    uint8_t stopped = 0;
+
+    memset(&upload_stats, 0, sizeof(upload_stats));
+    next_addr = 0;
+    memset(erased_sectors, 0, sizeof(erased_sectors));
+    started = 0;
+    transfer_error = 0;
     rgb_blink_set_time(5, 95);                      // Flash 5 ms every 100ms
     rgb_blink_set_color(0, 0, 50);                  // Tel the user data is being received
 
     pogobot_timer_init(&mytimer, timeout);          // Set a timeout
 
-    flash_state_partial = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET); 
-    int flash_status_ok = check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET); 
-
-    if (flash_state_partial) {
-        printf (" partial programming ! \n ");
-        missing_packet = ptr_l_missing_packet;
-    } else {
-        ptr_l_missing_packet = 0;
-    }
-
-    if (flash_status_ok)
-    {
+    flash_state_partial = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET);
+    if (check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET)) {
         // you need to erase the user prog before programming
         rgb_blink_set_time(5, 995);
         update_led_status();
         return;
     }
-    
 
-    //printf ("debut m %d, r %d, p %d \n", missing_packet, recovered_packet, ptr_l_missing_packet);
+    if (flash_state_partial) {
+        // The address list is RAM-only; a reboot cannot safely resume a partial image.
+        if (!partial_known) {
+            printf("Partial image has no recoverable address list; erase and restart upload\n");
+            rgb_blink_set_time(5, 995);
+            update_led_status();
+            return;
+        }
+        started = 1;
+        missing_total = missing_count;
+    } else {
+        partial_known = 0;
+        missing_count = 0;
+        missing_total = 0;
+        chunk_size = 0;
+    }
+
+    queue_drop_start = pogobot_infrared_get_queue_drop_count();
+    malformed_start = pogobot_infrared_get_malformed_count();
+    for (uint8_t i = 0; i < IR_RX_COUNT; i++) {
+        pogobot_infrared_get_receiver_error_counter(&slip_start[i], i);
+        ring_drop_start[i] = ir_uart_rx_drop_count(i);
+    }
 
     while(!pogobot_timer_has_expired(&mytimer)) {
         pogobot_infrared_update();
         rgb_blink();
         /* Get one Frame */
         if( pogobot_infrared_message_available() ) {
-            pogobot_timer_init(&mytimer, timeout);         // Reset timer each time we receive data
             pogobot_infrared_recover_next_message( &msg );
-            if (msg.header._packet_type == ir_t_flash)
-            {
-            
-                //printf("Received length : %d, [%s]\n", msg.header.payload_length, msg.payload);
-                frame = (struct sfl_frame*) msg.payload;
-                if(check_crc(frame)) {
-                    if(exec_frame_cmd(frame) != 0) {
-                        printf("exec_frame_cmd failed\n");
-                        break;
-                    }
-                }
-                else {
-                    printf("CRC Error after address 0x%08x\n", success_addr);
-                    print_frame(frame);
-                }
-                  
+            if (msg.header._packet_type != ir_t_flash)
+                continue;
+
+            pogobot_timer_init(&mytimer, timeout);
+            upload_stats.frames++;
+            if (msg.header.payload_length < 4 ||
+                msg.header.payload_length > sizeof(msg.payload)) {
+                upload_stats.malformed++;
+                transfer_error = 1;
+                continue;
+            }
+
+            frame = (struct sfl_frame *)msg.payload;
+            if (frame->payload_length != msg.header.payload_length - 4 ||
+                (frame->cmd == SFL_CMD_JUMP && frame->payload_length != 4) ||
+                (frame->cmd == SFL_CMD_ABORT && frame->payload_length != 0)) {
+                upload_stats.malformed++;
+                transfer_error = 1;
+                continue;
+            }
+            if (!check_crc(frame)) {
+                upload_stats.crc_errors++;
+                continue;
+            }
+            if (exec_frame_cmd(frame)) {
+                stopped = 1;
+                break;
             }
         }
 	}
+    if (!stopped)
+        printf("IR upload timed out\n");
+
+    printf("IR upload: frames=%lu written=%lu duplicates=%lu malformed=%lu "
+           "inner_crc=%lu gaps=%lu erases=%lu erase_us=%lu write_us=%lu "
+           "queue_drops=%lu outer_malformed=%lu\n",
+           (unsigned long)upload_stats.frames, (unsigned long)upload_stats.accepted,
+           (unsigned long)upload_stats.duplicates, (unsigned long)upload_stats.malformed,
+           (unsigned long)upload_stats.crc_errors, (unsigned long)upload_stats.gaps,
+           (unsigned long)upload_stats.erases, (unsigned long)upload_stats.erase_us,
+           (unsigned long)upload_stats.write_us,
+           (unsigned long)(pogobot_infrared_get_queue_drop_count() - queue_drop_start),
+           (unsigned long)(pogobot_infrared_get_malformed_count() - malformed_start));
+    for (uint8_t i = 0; i < IR_RX_COUNT; i++) {
+        slip_error_counter_s current;
+        pogobot_infrared_get_receiver_error_counter(&current, i);
+        printf("IR RX%u: slip_crc=%lu slip_overflow=%lu slip_escape=%lu ring_drops=%lu\n",
+               (unsigned int)i,
+               (unsigned long)(current.crc_mismatch_counter - slip_start[i].crc_mismatch_counter),
+               (unsigned long)(current.overflow_counter - slip_start[i].overflow_counter),
+               (unsigned long)(current.unknown_escaped_byte_counter -
+                               slip_start[i].unknown_escaped_byte_counter),
+               (unsigned long)(ir_uart_rx_drop_count(i) - ring_drop_start[i]));
+    }
+
+    if (!flash_state_partial) {
+        missing_count = 0;
+        missing_total = 0;
+    }
     rgb_blink_set_time(5, 995);
     update_led_status();
 }
