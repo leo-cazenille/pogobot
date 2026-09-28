@@ -39,27 +39,39 @@ inspected source before interpreting measurements.
 
 ## Phase 1: correct existing failure handling and expose losses
 
-- [ ] Fix the missing-count boundary conditions so every incomplete transfer
+- [x] Fix the missing-count boundary conditions so every detected incomplete transfer
       remains invalid, including exactly ten missing chunks.
-- [ ] Ensure recovered chunks are counted only once. Reset transfer accounting
+- [x] Ensure recovered chunks are counted only once. Reset transfer accounting
       consistently on new transfers, aborts, and timeouts.
-- [ ] Validate message lengths before parsing SFL fields or checking their CRC.
+- [x] Validate message lengths before parsing SFL fields or checking their CRC.
       Reject unsupported commands and invalid destinations without writing flash.
-- [ ] Make receive-buffer overflow handling bounded so the main loop can resume.
+- [x] Make receive-buffer overflow handling bounded so the main loop can resume.
       Define how decoding resynchronizes after bytes are dropped.
-- [ ] Count hardware/software receive overruns where observable, full message
+- [x] Count hardware/software receive overruns where observable, full message
       queues, malformed frames, CRC failures, duplicates, and accepted chunks.
       Retain per-receiver counters where useful.
-- [ ] Summarize counters after a transfer instead of printing each event during
+- [x] Summarize counters after a transfer instead of printing each event during
       reception. Measure time spent erasing and programming flash.
 
-Increasing the missing-address array alone is insufficient: completion,
-duplicate handling, and transfer identity must also be corrected. Keep initial
-changes local to the affected paths and preserve existing public application APIs.
+Increasing the missing-address array alone is insufficient: completion and
+duplicate handling also need correction. The legacy wire protocol carries no
+transfer identity; Phase 2 metadata must supply it. Keep initial changes local
+to the affected paths and preserve existing public application APIs.
 
 Acceptance: incomplete transfers cannot reach `FlashIsOK` through the known
 counting paths; buffer exhaustion cannot indefinitely block reception processing;
 diagnostics distinguish observed CRC failures from observed buffer drops.
+
+Host verification: run `python3 Software/tests/run_ir_upload_fault_test.py` from
+the repository root. The fault suite compiles the production receiver, UART
+ring, and SLIP decoder with AddressSanitizer and UndefinedBehaviorSanitizer.
+It covers a 60 KiB image, ten and 31 missing chunks, duplicates, timeout,
+abort, malformed commands and lengths, forbidden destinations, lost first and
+sector-boundary chunks, sector-spanning frames, UART ring exhaustion, and SLIP
+resynchronization. It found a sector-spanning erase defect, which was fixed.
+Mocked flash timings and host IR input do not establish hardware performance.
+Known probes show that missing final chunks, wrong-image repairs, and a reboot
+during partial recovery remain outside Phase 1's guarantees.
 
 ## Phase 2: introduce explicit transfer metadata and a receive bitmap
 

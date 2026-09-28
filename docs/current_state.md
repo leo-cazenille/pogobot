@@ -1,7 +1,7 @@
 # Current repository state
 
-Updated: 2026-09-28. Branch: `optimized_remote_transfer`; checked-out commit:
-`23ded0c`. This is a working-tree snapshot, including unfinished local changes.
+Updated: 2026-09-28. Branch: `optimized_remote_transfer`; this is a working-tree
+snapshot, including local changes.
 
 ## Inspected
 
@@ -11,6 +11,8 @@ Updated: 2026-09-28. Branch: `optimized_remote_transfer`; checked-out commit:
   `pogobios/ir_boot.c`, `pogolib/pogolib_infrared.c`, `pogolib/ir_uart.c`, and
   `pogolib/slip.c`, along with relevant headers and generated flash addresses.
 - The user-provided log of a failed Pogowall or Pogoshower firmware upload.
+- Host fault injection of the production IR upload, UART ring, and SLIP decoder
+  sources in `Software/tests/ir_upload_fault_test.c`.
 
 ## Understood
 
@@ -40,18 +42,22 @@ proposed repair sequence and its trade-offs.
 
 ## Working analyses and implementation
 
-Phase 1 of the [IR upload plan](ir_upload_reliability_plan.md) is implemented
-locally in `ir_boot.c`, `ir_uart.c/.h`, `pogolib_infrared.c`, `pogobot.h`, and
-`slip.c`. It adds stricter frame and flash-range checks, bounded missing-packet
-tracking, safe incomplete-upload handling, receive overflow counters, and
-upload diagnostics. The Pogobios target cross-build succeeds with the bundled
-RISC-V GCC 10.1.0 toolchain. Hardware validation remains outstanding. The
-fixed-size missing-address list still limits recovery; the bitmap and full-image
-verification belong to Phase 2.
+Phase 1 receiver changes in `ir_boot.c`, `ir_uart.c/.h`,
+`pogolib_infrared.c`, `pogobot.h`, and `slip.c` add frame and flash-range checks,
+bounded missing-packet tracking, overflow counters, and diagnostics. Host fault
+injection passes for a 60 KiB image, ten recoverable gaps, 31 gaps, duplicates,
+timeout, abort, malformed frames, sector-boundary loss, a full UART ring, and
+SLIP resynchronization. That testing found and fixed an erase bug when one
+frame spans two sectors. The Pogobios v3 cross-build succeeds with RISC-V GCC
+10.1.0. Hardware validation remains outstanding.
 
-Other local changes include `Software/pogosoc.py`, `AGENTS.md`, an untracked
-hardware history directory, and this documentation work. Their contents should
-be reviewed separately before any commit.
+Host probes also confirm legacy protocol limits: a missing final chunk can
+still set `FlashIsOK`; a replacement chunk from another image can complete
+a partial transfer; and repair cannot resume after reboot. Image length,
+transfer identity, and full-image verification require Phase 2 metadata.
+
+Other local changes include `Software/pogosoc.py` and an untracked hardware
+history directory. Their contents are outside this verification work.
 
 ## Current decisions
 
@@ -64,15 +70,16 @@ be reviewed separately before any commit.
 
 ## Data limitations
 
-The current evidence is one failure log and a source inspection. A gap proves
-that the receiver did not accept a frame at that address; it does not locate the
-loss within the optical, interrupt, buffering, or flash path. No complete build,
-instrumented upload, or image readback has been performed for the ongoing edits.
+The current evidence is one failure log, source inspection, a simulated host
+device, and a cross-build. A gap does not locate the loss within the optical,
+interrupt, buffering, or flash path. The host harness uses mocked transport,
+flash, and timing; no instrumented hardware upload or image readback has been
+performed.
 
 ## Next concrete tasks
 
-1. Validate failure, partial-recovery, duplicate, and all 64-sector erase cases
-   on suitable hardware before flashing production robots.
+1. Validate failure, partial recovery, duplicates, and all four 64 KiB erase
+   sectors on suitable hardware before flashing production robots.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
 3. Use those measurements to choose Phase 2 bitmap behavior and later repetition

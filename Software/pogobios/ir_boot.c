@@ -37,7 +37,7 @@ static uint32_t missing_addr[NB_MISSING_ADDR];
 static uint32_t missing_total;
 static uint8_t missing_count;
 static uint8_t chunk_size;
-// The 256 KiB upload window contains 64 sectors; track each erase independently.
+// Track each erase sector in the upload window using the generated sector size.
 static uint8_t erased_sectors[((IR_FLASH_END - IR_FLASH_START) /
                                SPIFLASH_SECTOR_SIZE + 7) / 8];
 static uint8_t flash_state_partial;
@@ -237,11 +237,15 @@ static uint8_t exec_frame_cmd(struct sfl_frame *frame)
 
         if (!flash_state_partial) {
             // Erase each touched sector once, even when its boundary packet was lost.
-            uint32_t sector = (offset - IR_FLASH_START) / SPIFLASH_SECTOR_SIZE;
-            uint8_t bit = 1u << (sector & 7u);
-            if (!(erased_sectors[sector >> 3] & bit)) {
-                time_erase_sector(offset & ~(SPIFLASH_SECTOR_SIZE - 1));
-                erased_sectors[sector >> 3] |= bit;
+            uint32_t first = (offset - IR_FLASH_START) / SPIFLASH_SECTOR_SIZE;
+            uint32_t last = (offset + length - 1 - IR_FLASH_START) /
+                            SPIFLASH_SECTOR_SIZE;
+            for (uint32_t sector = first; sector <= last; sector++) {
+                uint8_t bit = 1u << (sector & 7u);
+                if (!(erased_sectors[sector >> 3] & bit)) {
+                    time_erase_sector(IR_FLASH_START + sector * SPIFLASH_SECTOR_SIZE);
+                    erased_sectors[sector >> 3] |= bit;
+                }
             }
         }
 
