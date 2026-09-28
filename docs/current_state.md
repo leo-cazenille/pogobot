@@ -70,13 +70,21 @@ wire fixture. Automatic mode selection has host serial-stream tests. Robot and
 remote Pogobios v3 builds succeed.
 Robot delivery, timing, and per-robot completion remain unverified on hardware.
 
+Phase 3 sends three full image passes by default with unchanged example
+Makefiles. `POGOBOT_IR_COPIES=1` through `5` selects the count. Repeated START
+and END messages use one transfer ID, and accepted chunks are not rewritten.
+The terminal reports remote-acknowledged pass time; the robot now reports frame
+processing time alongside flash erase/write timing. Host tests cover the
+three-pass serial schedule and repair of disjoint losses without re-erase.
+The 200 ms data gap and three-second erase pause remain provisional.
+
 Other local changes include `Software/pogosoc.py` and an untracked hardware
 history directory. Their contents are outside this verification work.
 
 ## Current decisions
 
-- Complete and validate the receiver correctness work before adding repetition,
-  FEC, or return-link feedback.
+- Measure Phase 3 timing and completion on hardware before changing pacing or
+  selecting FEC and return-link feedback parameters.
 - Keep firmware changes small and preserve the existing application API where
   possible. New diagnostics must have bounded RAM and execution costs.
 - Treat the reported upload as an engineering failure case, not a measured
@@ -97,4 +105,5 @@ performed.
    the SDK terminal and helper before testing `make connect TTY=...`.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
-3. Use those measurements to choose Phase 3 repetition and later FEC parameters.
+3. Compare one, two, and three passes under matched conditions. Use measured
+   completion, processing times, and loss counters to tune pacing and later FEC.

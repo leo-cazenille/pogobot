@@ -9,6 +9,9 @@ VERSION = 1
 # select the versioned transfer without changing example Makefiles.
 CAPABILITY_BANNER = b"POGOBOT-IR-V2\n"
 CHUNK_SIZE = 64
+# Full-image passes separate copies in time without extra robot-side buffers.
+DEFAULT_COPIES = 3
+MAX_COPIES = 5
 SLOT_SIZE = 0x20000
 SLOT_ADDRESSES = (0x240000, 0x260000)
 CMD_START = b"\x10"

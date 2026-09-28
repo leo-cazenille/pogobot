@@ -50,7 +50,7 @@ The command "rc_flash_robot" send to the robots a special command to switch to l
 When the programmation is done, the robots blink green slowly. <br>
 If the robots blink orange, the programmation is partiel. Change the distance or angle of the remote and start again the "rc_flash_robot" command.
 
-### Versioned IR firmware upload (Phase 2)
+### Reliable IR firmware upload (Phases 2–3)
 
 Install matching current Pogobios builds on the remote and robots, and update
 the SDK tools used by the example Makefile so they include the current
@@ -69,14 +69,26 @@ path; upload each image separately for versioned IR transfers.
 
 The current version accepts one image per transfer in the gateware slot
 (`0x240000`) or firmware slot (`0x260000`), up to 128 KiB. The PC sends a versioned
-START, numbered 64-byte DATA chunks, and END. The robot erases the destination
-at START, ignores duplicate chunks, reads each write back, and checks a CRC-32
-over the exact image before writing `FlashIsOK`. A robot that misses chunks
-keeps the image invalid. A new transfer ID restarts and erases the image;
-repeated START with the same ID and metadata preserves progress in RAM until
-reboot. The remote currently pauses three seconds after START for flash erase;
-this delay needs measurement on hardware.
+START, numbered 64-byte DATA chunks, and two END messages per pass. The normal
+command sends three complete passes with the same transfer ID. To compare one
+or two passes without editing a Makefile, use for example:
 
-The serial acknowledgements confirm processing by the remote, not successful
-reception or completion by each robot. Check the robot's status before running
+    POGOBOT_IR_COPIES=2 make connect TTY=/dev/ttyUSBX
+
+Valid copy counts are 1–5. Full passes separate repeat copies in time. The
+robot erases the destination at the first START, ignores duplicate chunks,
+reads each write back, and checks a CRC-32 over the exact image before writing
+`FlashIsOK`. A robot that still misses chunks keeps the image invalid. A new
+transfer ID restarts and erases the image; repeated START with the same ID and
+metadata preserves progress in RAM until reboot.
+
+The remote still pauses 200 ms after each data frame and three seconds after
+START for flash erase. At 60 KiB, 960 data frames make the 200 ms pauses alone
+about 3.2 minutes per pass, or 9.6 minutes for three passes. The terminal prints
+the time and remote acknowledgement for each pass. Robot logs report receiver
+processing time, flash erase/write time, and drop counters; use hardware trials
+to determine whether the pacing can safely change.
+
+Serial acknowledgements confirm processing by the remote, not successful
+reception or completion by each robot. Check each robot's status before running
 the new image.

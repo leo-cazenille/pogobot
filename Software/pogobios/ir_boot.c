@@ -55,7 +55,11 @@ static struct {
     uint32_t gaps;
     uint32_t erases;
     uint32_t erase_us;
+    uint32_t erase_max_us;
     uint32_t write_us;
+    uint32_t write_max_us;
+    uint32_t process_us;
+    uint32_t process_max_us;
 } upload_stats;
 
 /* One versioned image fits either 128 KiB user slot and needs at most 256 bitmap bytes. */
@@ -108,27 +112,39 @@ static void print_missing_list(void)
 static void time_erase_marker(void)
 {
     time_reference_t timer;
+    uint32_t elapsed;
     pogobot_stopwatch_reset(&timer);
     spiBeginErase4(FLASH_OK_OFFSET);
-    upload_stats.erase_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    elapsed = pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    upload_stats.erase_us += elapsed;
+    if (elapsed > upload_stats.erase_max_us)
+        upload_stats.erase_max_us = elapsed;
     upload_stats.erases++;
 }
 
 static void time_erase_sector(uint32_t addr)
 {
     time_reference_t timer;
+    uint32_t elapsed;
     pogobot_stopwatch_reset(&timer);
     erase_flash_sector(addr);
-    upload_stats.erase_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    elapsed = pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    upload_stats.erase_us += elapsed;
+    if (elapsed > upload_stats.erase_max_us)
+        upload_stats.erase_max_us = elapsed;
     upload_stats.erases++;
 }
 
 static void time_write(uint32_t addr, unsigned char *data, uint32_t length)
 {
     time_reference_t timer;
+    uint32_t elapsed;
     pogobot_stopwatch_reset(&timer);
     write_to_flash(addr, data, length);
-    upload_stats.write_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    elapsed = pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    upload_stats.write_us += elapsed;
+    if (elapsed > upload_stats.write_max_us)
+        upload_stats.write_max_us = elapsed;
 }
 
 #ifndef IR_UPLOAD_FLASH_READ
@@ -556,9 +572,19 @@ void ir_boot_loop(void) {
                 continue;
             }
             if (v2_command(frame->cmd)) {
+                time_reference_t process_timer;
+                uint8_t finished;
+                uint32_t process_us;
                 legacy_blocked = 1;
                 timeout = 8000000;
-                if (exec_v2_frame(frame)) {
+                // Measure receiver work separately from the interframe wait.
+                pogobot_stopwatch_reset(&process_timer);
+                finished = exec_v2_frame(frame);
+                process_us = pogobot_stopwatch_get_elapsed_microseconds(&process_timer);
+                upload_stats.process_us += process_us;
+                if (process_us > upload_stats.process_max_us)
+                    upload_stats.process_max_us = process_us;
+                if (finished) {
                     stopped = 1;
                     break;
                 }
@@ -574,13 +600,19 @@ void ir_boot_loop(void) {
         printf("IR upload timed out\n");
 
     printf("IR upload: frames=%lu written=%lu duplicates=%lu malformed=%lu "
-           "inner_crc=%lu gaps=%lu erases=%lu erase_us=%lu write_us=%lu "
+           "inner_crc=%lu gaps=%lu erases=%lu erase_us=%lu erase_max_us=%lu "
+           "write_us=%lu write_max_us=%lu "
+           "process_us=%lu process_max_us=%lu "
            "queue_drops=%lu outer_malformed=%lu\n",
            (unsigned long)upload_stats.frames, (unsigned long)upload_stats.accepted,
            (unsigned long)upload_stats.duplicates, (unsigned long)upload_stats.malformed,
            (unsigned long)upload_stats.crc_errors, (unsigned long)upload_stats.gaps,
            (unsigned long)upload_stats.erases, (unsigned long)upload_stats.erase_us,
+           (unsigned long)upload_stats.erase_max_us,
            (unsigned long)upload_stats.write_us,
+           (unsigned long)upload_stats.write_max_us,
+           (unsigned long)upload_stats.process_us,
+           (unsigned long)upload_stats.process_max_us,
            (unsigned long)(pogobot_infrared_get_queue_drop_count() - queue_drop_start),
            (unsigned long)(pogobot_infrared_get_malformed_count() - malformed_start));
     for (uint8_t i = 0; i < IR_RX_COUNT; i++) {

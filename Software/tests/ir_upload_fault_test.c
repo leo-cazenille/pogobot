@@ -607,6 +607,35 @@ static void test_v2_missing_tail_and_many_losses(void)
     assert_chunks(0, 33);
 }
 
+static void test_v2_three_pass_repair(void)
+{
+    const uint32_t id = 0x3a7b21cdu;
+    const uint32_t length = 33u * IR_V2_CHUNK_SIZE;
+    const uint32_t address = SPIFLASH_BASE + 0x60000u;
+    const uint32_t crc = generated_image_crc(length);
+    reset_device();
+    // Pass one loses 31 chunks. The second still misses two of them; the
+    // third repairs those holes while accepted chunks remain programmed once.
+    for (unsigned int pass = 0; pass < 3; pass++) {
+        for (unsigned int copy = 0; copy < 3; copy++)
+            append_v2_start(id, address, length, crc);
+        for (unsigned int index = 0; index < 33; index++) {
+            if (pass == 0 && index >= 1 && index <= 31) continue;
+            if (pass == 1 && (index == 7 || index == 11)) continue;
+            append_v2_data(id, index, length);
+        }
+        append_v2_end(id);
+        append_v2_end(id);
+    }
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(v2_upload.received == 33 && upload_stats.accepted == 33);
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    for (unsigned int index = 0; index < 33; index++)
+        CHECK(chunk_writes[(0x60000u / 64u) + index] == 1);
+    assert_chunks(0, 33);
+}
+
 static void test_v2_rejected_data_and_restart(void)
 {
     const uint32_t id = 0x11223344u;
@@ -772,6 +801,7 @@ int main(int argc, char **argv)
     demonstrate_legacy_protocol_limits();
     test_v2_reorder_and_short_tail();
     test_v2_missing_tail_and_many_losses();
+    test_v2_three_pass_repair();
     test_v2_rejected_data_and_restart();
     test_v2_metadata_and_reset();
     test_v2_malformed_frames();

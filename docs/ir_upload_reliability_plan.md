@@ -2,8 +2,8 @@
 
 Date: 2026-09-28
 
-Status: Phases 1–2 software and host verification complete; robot validation
-and Phases 3–5 pending.
+Status: Phases 1–2 software and host verification complete; Phase 3 software
+implemented with host verification, hardware timing and Phases 4–5 pending.
 
 ## Phase commit record
 
@@ -164,17 +164,26 @@ needed for per-robot completion status.
 
 ## Phase 3: add configurable repetition and measured pacing
 
-- [ ] Support configurable copy counts and repeated image passes. A receiver
+- [x] Support configurable copy counts and repeated image passes. A receiver
       accepts only chunks it still needs during subsequent passes.
-- [ ] Repeat metadata and completion messages as well as data.
-- [ ] Separate copies in time; support spacing across small groups or passes once
+- [x] Repeat metadata and completion messages as well as data.
+- [x] Separate copies in time; support spacing across small groups or passes once
       the receiver safely accepts reordered chunks.
-- [ ] Measure transmission completion, receiver processing, and flash write time
-      before tuning the current fixed 200 ms delay. Preserve preparation time for
-      erases and adequate receive servicing between packets.
-- [ ] Make uploader status distinguish remote transmission from confirmed robot
+- [x] Report host elapsed time per remote-acknowledged pass and instrument robot
+      frame processing alongside existing erase/write timing and drop counters.
+- [ ] Measure on hardware before tuning the current fixed 200 ms delay and
+      three-second erase preparation. Check receiver servicing between packets.
+- [x] Make uploader status distinguish remote transmission from confirmed robot
       completion. Broadcast mode without feedback can report transmission progress
       and expose completion through robot indicators.
+
+The unchanged example `make connect TTY=...` command defaults to three full
+passes for the observed high-loss case. `POGOBOT_IR_COPIES=1` or `2` selects
+shorter comparisons; accepted values are 1–5. Every pass repeats START, all
+DATA frames, and two END frames using the same transfer ID. The remote already
+broadcasts each START three times. Robot bitmaps suppress duplicate flash
+writes and retain progress if a pass ends incomplete. These counts and the
+existing pacing are provisional until robot measurements.
 
 Two copies add 100% packet traffic; three add 200%. With independent loss
 probability `p`, two copies leave residual loss probability `p^2` per chunk.

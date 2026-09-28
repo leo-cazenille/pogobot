@@ -21,7 +21,8 @@ import json
 import socket
 import secrets
 
-from ir_upload_v2 import image_frames, abort_payload, CMD_START, CMD_ABORT, CAPABILITY_BANNER
+from ir_upload_v2 import (image_frames, abort_payload, CMD_START, CMD_END,
+                          CMD_ABORT, CAPABILITY_BANNER, DEFAULT_COPIES, MAX_COPIES)
 
 # Console ------------------------------------------------------------------------------------------
 
@@ -329,6 +330,14 @@ class LiteXTerm:
         self.IR    = IR
         self.ir_v2_requested = ir_v2
         self.ir_v2 = ir_v2
+        # The example Makefiles remain unchanged; the environment selects how
+        # many complete broadcasts the remote receives for each IR upload.
+        try:
+            self.ir_v2_copies = int(os.environ.get("POGOBOT_IR_COPIES", DEFAULT_COPIES))
+        except ValueError as exc:
+            raise ValueError("POGOBOT_IR_COPIES must be an integer from 1 to 5") from exc
+        if not 1 <= self.ir_v2_copies <= MAX_COPIES:
+            raise ValueError("POGOBOT_IR_COPIES must be an integer from 1 to 5")
 
     def open(self, port, baudrate):
         if hasattr(self, "port"):
@@ -533,24 +542,37 @@ class LiteXTerm:
         with open(filename, "rb") as source:
             image = source.read()
         transfer_id = secrets.randbits(32)
-        frames = image_frames(image, address, transfer_id)
-        print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, {len(image)} bytes")
+        print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, "
+              f"{len(image)} bytes, {self.ir_v2_copies} passes")
         started = False
         try:
-            for command, payload in frames:
-                frame = SFLFrame()
-                frame.cmd, frame.payload = command, payload
-                if not self.send_frame(frame):
-                    raise IOError("remote rejected IR v2 frame")
-                if command == CMD_START:
-                    started = True
+            for pass_number in range(1, self.ir_v2_copies + 1):
+                pass_start = time.monotonic()
+                # START, all DATA, and END are repeated with one transfer ID;
+                # receivers keep accepted chunks and skip duplicate writes.
+                for command, payload in image_frames(image, address, transfer_id):
+                    frame = SFLFrame()
+                    frame.cmd, frame.payload = command, payload
+                    if not self.send_frame(frame):
+                        raise IOError("remote rejected IR v2 frame")
+                    if command == CMD_START:
+                        started = True
+                    if command == CMD_END:
+                        completion_frame = frame
+                # A second END gives a receiver another chance to finalize if
+                # the first completion message was lost over infrared.
+                if not self.send_frame(completion_frame):
+                    raise IOError("remote rejected repeated IR v2 END frame")
+                elapsed = time.monotonic() - pass_start
+                print(f"[LXTERM] Remote acknowledged pass {pass_number}/{self.ir_v2_copies} "
+                      f"in {elapsed:.1f}s; robot completion unconfirmed.")
         except Exception:
             if started:
                 abort = SFLFrame()
                 abort.cmd, abort.payload = CMD_ABORT, abort_payload(transfer_id)
                 self.send_frame(abort)
             raise
-        print("[LXTERM] Sent image to remote; robot completion requires its own status check.")
+        print("[LXTERM] All passes acknowledged by remote; check each robot's status.")
         return len(image)
 
     def boot(self):
