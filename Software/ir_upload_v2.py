@@ -5,6 +5,9 @@ import zlib
 
 
 VERSION = 1
+# The remote prints this before the normal SFL request so make connect can
+# select the versioned transfer without changing example Makefiles.
+CAPABILITY_BANNER = b"POGOBOT-IR-V2\n"
 CHUNK_SIZE = 64
 SLOT_SIZE = 0x20000
 SLOT_ADDRESSES = (0x240000, 0x260000)

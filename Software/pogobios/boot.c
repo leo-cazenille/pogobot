@@ -365,6 +365,13 @@ int flash_robot(void)
 		msleep(200);
 	}
 	
+	/* Announce versioned IR support before the existing magic request. */
+	/* Older terminals ignore this text and still recognize SFL_MAGIC_REQ. */
+	c = IR_V2_CAPABILITY_BANNER;
+	while(*c) {
+		uart_write(*c);
+		c++;
+	}
 	/* Send the serialboot "magic" request to Host and wait for ACK_OK */
 	c = str;
 	while(*c) {

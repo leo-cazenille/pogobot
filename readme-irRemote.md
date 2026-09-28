@@ -25,7 +25,7 @@ in order to upload the code. The robot reboot on the remote control code.
 
 Connect the remote from the folder where the usercode was compiled.
 
-    make connect (TTY=/dev/ttyUSBX) (tty of the remote)
+    make connect TTY=/dev/ttyUSBX
 
 When a remote starts, it exposes the standard pogobot bios. You need to start the remote bios by typing : 
 
@@ -52,16 +52,23 @@ If the robots blink orange, the programmation is partiel. Change the distance or
 
 ### Versioned IR firmware upload (Phase 2)
 
-Install matching current Pogobios builds on the remote and robots before using
-this mode. The current version accepts one image per transfer in the gateware
-slot (`0x240000`) or firmware slot (`0x260000`), up to 128 KiB. A two-entry
-`images.json` is not supported by `--ir-v2`; upload each image separately.
+Install matching current Pogobios builds on the remote and robots, and update
+the SDK tools used by the example Makefile so they include the current
+`litex_term.py` and `ir_upload_v2.py`. For a firmware image, use the normal
+command in the example directory:
 
-For a firmware image, connect to the remote with:
+    make connect TTY=/dev/ttyUSBX
 
-    ./litex_term.py --serial-boot --kernel=firmware.bin --kernel-adr=0x260000 --safe --ir-v2 /dev/ttyUSBX
+After starting the remote with `run`, enter `rc_flash_robot` at its prompt.
+The updated remote announces versioned IR support before requesting the image,
+and the updated terminal selects that mode automatically for the single firmware
+image in the example Makefile. `--ir-v2` remains an optional manual override;
+it is not needed for this command. Direct cable uploads and older remotes keep
+the legacy upload behavior. A two-entry `images.json` also stays on the legacy
+path; upload each image separately for versioned IR transfers.
 
-Then enter `rc_flash_robot` at the remote prompt. The PC sends a versioned
+The current version accepts one image per transfer in the gateware slot
+(`0x240000`) or firmware slot (`0x260000`), up to 128 KiB. The PC sends a versioned
 START, numbered 64-byte DATA chunks, and END. The robot erases the destination
 at START, ignores duplicate chunks, reads each write back, and checks a CRC-32
 over the exact image before writing `FlashIsOK`. A robot that misses chunks
@@ -72,4 +79,4 @@ this delay needs measurement on hardware.
 
 The serial acknowledgements confirm processing by the remote, not successful
 reception or completion by each robot. Check the robot's status before running
-the new image. The default terminal mode remains the legacy upload protocol.
+the new image.

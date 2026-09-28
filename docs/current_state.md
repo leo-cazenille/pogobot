@@ -58,12 +58,16 @@ mode uses metadata and image CRC to address the first two limits.
 
 Phase 2 now adds versioned START/DATA/END/ABORT SFL frames, a 256-byte maximum
 receive bitmap, flash readback after each chunk, and exact-image CRC-32 before
-`FlashIsOK`. The PC uploader selects this mode explicitly with `--ir-v2`, and
-the remote forwards the new commands with a provisional three-second erase
-pause. Host fault injection passes for reordered chunks, missing first and last
-chunks, 31 losses, the 128 KiB size limit, metadata changes, readback failure,
-CRC mismatch, and a
-Python-generated wire fixture. Robot and remote Pogobios v3 builds succeed.
+`FlashIsOK`. The remote announces support before the existing serial request,
+so the SDK terminal selects this mode automatically for the example Makefiles'
+single-image `make connect TTY=...` command. The optional `--ir-v2` flag remains
+for manual use. Direct cable uploads and older remotes use the legacy mode;
+SDK copies of the terminal must be updated. The remote forwards new commands
+with a provisional three-second erase pause. Host fault injection passes for
+reordered chunks, missing first and last chunks, 31 losses, the 128 KiB size
+limit, metadata changes, readback failure, CRC mismatch, and a Python-generated
+wire fixture. Automatic mode selection has host serial-stream tests. Robot and
+remote Pogobios v3 builds succeed.
 Robot delivery, timing, and per-robot completion remain unverified on hardware.
 
 Other local changes include `Software/pogosoc.py` and an untracked hardware
@@ -89,7 +93,8 @@ performed.
 ## Next concrete tasks
 
 1. Validate Phase 2 flash readback, CRC, incomplete marker state, and the
-   provisional erase pause on suitable hardware before production use.
+   provisional erase pause on suitable hardware before production use. Update
+   the SDK terminal and helper before testing `make connect TTY=...`.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
 3. Use those measurements to choose Phase 3 repetition and later FEC parameters.

@@ -21,7 +21,7 @@ import json
 import socket
 import secrets
 
-from ir_upload_v2 import image_frames, abort_payload, CMD_START, CMD_ABORT
+from ir_upload_v2 import image_frames, abort_payload, CMD_START, CMD_ABORT, CAPABILITY_BANNER
 
 # Console ------------------------------------------------------------------------------------------
 
@@ -311,6 +311,8 @@ class LiteXTerm:
 
         self.prompt_detect_buffer = bytes(len(sfl_prompt_req))
         self.magic_detect_buffer  = bytes(len(sfl_magic_req))
+        self.ir_v2_detect_buffer = bytes(len(CAPABILITY_BANNER))
+        self.ir_v2_advertised = False
 
         self.console = Console()
 
@@ -325,6 +327,7 @@ class LiteXTerm:
         self.debug = debug
         self.delay = delay
         self.IR    = IR
+        self.ir_v2_requested = ir_v2
         self.ir_v2 = ir_v2
 
     def open(self, port, baudrate):
@@ -575,8 +578,20 @@ class LiteXTerm:
         else:
             return False
 
+    def detect_ir_v2(self, data):
+        if len(data):
+            self.ir_v2_detect_buffer = self.ir_v2_detect_buffer[1:] + data
+            if self.ir_v2_detect_buffer == CAPABILITY_BANNER:
+                self.ir_v2_advertised = True
+
     def answer_magic(self):
         print("[LXTERM] Received firmware download request from the device.")
+        # A remote advertises v2 immediately before SFL magic; direct cable
+        # boots and older remotes continue to use the legacy transfer.
+        self.ir_v2 = self.ir_v2_requested or (self.ir_v2_advertised and len(self.mem_regions) == 1)
+        self.ir_v2_advertised = False
+        if self.ir_v2 and not self.ir_v2_requested:
+            print("[LXTERM] Remote advertised versioned IR upload.")
         if(len(self.mem_regions)):
             self.port.write(sfl_magic_ack)
         for filename, base in self.mem_regions.items():
@@ -596,6 +611,7 @@ class LiteXTerm:
                 if len(self.mem_regions):
                     if self.serial_boot and self.detect_prompt(c):
                         self.answer_prompt()
+                    self.detect_ir_v2(c)
                     if self.detect_magic(c):
                         self.answer_magic()
 

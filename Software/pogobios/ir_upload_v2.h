@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 /* Versioned SFL commands are distinct from the legacy LOAD/JUMP/ABORT set. */
+#define IR_V2_CAPABILITY_BANNER "POGOBOT-IR-V2\n"
 #define IR_V2_CMD_START 0x10u
 #define IR_V2_CMD_DATA  0x11u
 #define IR_V2_CMD_END   0x12u
