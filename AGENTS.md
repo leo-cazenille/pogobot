@@ -23,3 +23,5 @@ This repository contains mostly C code.
   - known data limitations;
   - next concrete tasks.
 - Keep `current_state.md` concise and update it after meaningful milestones.
+- For each completed IR upload software phase, record its final implementation
+  commit hash and hardware validation status in `docs/ir_upload_reliability_plan.md`.

@@ -2,7 +2,18 @@
 
 Date: 2026-09-28
 
-Status: proposed; implementation and hardware validation pending.
+Status: Phase 1 software and host verification complete; robot validation and
+Phases 2–5 pending.
+
+## Phase commit record
+
+Record the final implementation commit after host verification for each phase.
+Robot validation is tracked separately, so a software checkpoint does not imply
+that the feature has been tested on hardware.
+
+| Phase | Final software commit | Host verification | Robot validation |
+| --- | --- | --- | --- |
+| 1 | `6afb76846663270bf2411c1b27728e18ab1f6b65` | Passed fault injection and v3 cross-build | Pending |
 
 ## Objective
 
