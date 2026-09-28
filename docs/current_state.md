@@ -39,7 +39,7 @@ proposed repair sequence and its trade-offs.
 - Which exact robot and remote binaries were deployed for that upload, and
   whether they match this checkout.
 - Completion rate and upload duration across distances, orientations, lighting,
-  and robot counts. Return-link reliability is also unmeasured.
+  and robot counts.
 - Whether Phase 1 behavior is correct on hardware under real optical loss.
 
 ## Working analyses and implementation
@@ -103,7 +103,8 @@ history directory. Their contents are outside this verification work.
 ## Current decisions
 
 - Measure coded and uncoded timing and completion on hardware before changing
-  pacing or selecting return-link feedback parameters.
+  pacing or redundancy.
+- Treat uploads as one-way broadcasts; robots are not expected to message remotes.
 - Use fixed 16+4 Cauchy Reed–Solomon coding with four-group sender
   interleaving. One coded pass is the initial default; hardware results may
   justify more passes or different pacing.
@@ -130,6 +131,6 @@ performed.
    and final image integrity for both remote types.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under
    matched conditions. Use completion, decoder timing, and loss counters to
-   tune pacing and decide whether return-link feedback is useful.
+   tune pacing and redundancy.
 4. Upload `Software/example/firmware_integrity` as a 50–60 KiB image and record
    its on-robot PASS/FAIL result alongside the receiver diagnostics.

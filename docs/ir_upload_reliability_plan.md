@@ -2,8 +2,8 @@
 
 Date: 2026-09-28
 
-Status: Phases 1–4 software and host verification complete; hardware validation,
-pacing measurements, and Phase 5 pending.
+Status: Phases 1–4 software and host verification complete; hardware validation
+and pacing measurements pending.
 
 ## Phase commit record
 
@@ -25,9 +25,9 @@ with bounded RAM use and support for broadcasting to several robots. A robot
 must mark an image valid only after receiving and verifying the complete image.
 Correct chunks should survive retransmission rounds within the same transfer.
 
-Start with receiver correctness, image verification, and configurable repetition.
-Add packet-level forward error correction (FEC) and optional feedback after
-measuring the resulting reliability and upload time.
+Use receiver correctness, image verification, configurable repetition, and
+packet-level forward error correction (FEC) for one-way broadcasts. Measure
+reliability and upload time on robots before tuning redundancy and pacing.
 
 ## Evidence from the current implementation
 
@@ -161,8 +161,8 @@ payloads, reordered and repeated chunks, short final chunks, 31 missing chunks,
 the 128 KiB size limit, metadata changes, reboot restart, malformed frames,
 readback failure, and CRC
 mismatch. Both robot and remote Pogobios targets cross-build. The remote's
-serial ACK still does not confirm reception by a robot; Phase 5 feedback is
-needed for per-robot completion status.
+serial ACK does not confirm reception by a robot; inspect each robot's final
+integrity result to establish completion.
 
 ## Phase 3: add configurable repetition and measured pacing
 
@@ -176,8 +176,8 @@ needed for per-robot completion status.
 - [ ] Measure on hardware before tuning the current fixed 200 ms delay and
       three-second erase preparation. Check receiver servicing between packets.
 - [x] Make uploader status distinguish remote transmission from confirmed robot
-      completion. Broadcast mode without feedback can report transmission progress
-      and expose completion through robot indicators.
+      completion. One-way broadcast reports transmission progress and exposes
+      completion through robot indicators.
 
 In uncoded mode, the unchanged example `make connect TTY=...` command defaults
 to three full passes for the observed high-loss case. `POGOBOT_IR_COPIES=1` or
@@ -270,40 +270,21 @@ all 64 coefficient positions. On hardware, compare completion and duration at
 one, two, and three passes; inspect FEC recovery, decoder timing, and receive
 drop counters before production use.
 
-## Phase 5: optional selective retransmission through the return link
-
-First measure whether robots can reliably reach the remote. The wall/shower's
-strong outgoing signal does not establish reliable reception in the reverse
-direction.
-
-- [ ] For one robot, request missing-chunk bitmaps and retransmit only required
-      chunks or additional parity.
-- [ ] For multiple robots, reserve quiet feedback periods and use polling or
-      randomized response slots to avoid simultaneous replies.
-- [ ] Aggregate repair requests so one broadcast repair can serve several robots.
-- [ ] Retry lost feedback with bounded timeouts. Require explicit final status
-      from each expected robot when claiming group completion; silence is not success.
-- [ ] Retain repetition and FEC modes for deployments with unreliable feedback.
-
-Acceptance: feedback remains usable as robot count increases, lost responses do
-not produce false completion, and repairs reduce total traffic or upload time.
-
 ## Implementation locations and compatibility
 
 | Location | Planned responsibility |
 | --- | --- |
 | [`Software/pogobios/ir_boot.c`](../Software/pogobios/ir_boot.c) | Receiver state machine, bounds checks, bitmap, erase lifecycle, reconstruction integration, and final verification. |
-| [`Software/pogobios/boot.c`](../Software/pogobios/boot.c) | Remote forwarding, repetition, pacing, and optional feedback scheduling. |
+| [`Software/pogobios/boot.c`](../Software/pogobios/boot.c) | Remote forwarding, repetition, and pacing. |
 | [`Software/litex_term.py`](../Software/litex_term.py) | Image metadata, transfer configuration, accurate progress reporting, and possibly parity generation. |
 | [`Software/pogolib/ir_uart.c`](../Software/pogolib/ir_uart.c) | Bounded overflow handling and counters. |
 | [`Software/pogolib/pogolib_infrared.c`](../Software/pogolib/pogolib_infrared.c) | Queue-drop accounting and reception servicing. |
 | [`Software/pogobios/cmds/cmd_ir.c`](../Software/pogobios/cmds/cmd_ir.c) | Upload-mode configuration and diagnostic commands as needed. |
 
 Deploy matching uploader, remote Pogobios, and robot Pogobios for the new protocol.
-Use explicit version selection or capability negotiation where feedback is
-available. Keep legacy transfers identifiable and preserve existing application
-APIs. Determine whether the active receiver runs in the bootloader or current
-Pogobios image when documenting the upgrade procedure.
+The remote's existing announcement selects the versioned upload. Preserve
+existing application APIs. Determine whether the active receiver runs in the
+bootloader or current Pogobios image when documenting the upgrade procedure.
 
 The host may generate parity to reduce work on the remote, or the remote may
 generate it from a small buffered group. Select this placement after measuring
@@ -337,4 +318,3 @@ selecting default repetition, parity, and pacing parameters.
 - [Current software architecture](current_state.md).
 - [Existing remote upload workflow](../readme-irRemote.md).
 - [RFC 5510: Reed–Solomon FEC schemes](https://www.rfc-editor.org/rfc/rfc5510.html).
-- [RFC 5401: multicast negative-acknowledgement building blocks](https://www.rfc-editor.org/rfc/rfc5401.html).
