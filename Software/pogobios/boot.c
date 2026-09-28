@@ -31,6 +31,7 @@
 #include <sfl.h>
 #include <boot.h>
 #include <ir_boot.h>
+#include <ir_upload_v2.h>
 #include <pogobot.h>
 
 #include <libbase/uart.h>
@@ -120,6 +121,7 @@ static void send_flash_message( char* mPayload, uint32_t size)
         pogobot_infrared_emitting_power_list(3, 3, 3, 3);
     message.header.payload_length = size;
     message.header._sender_ir_index = ir_all;
+    message.header._receiver_ir_index = 0;  // The robot fills in the actual receiver on arrival.
     memcpy( message.payload, mPayload, size );
     message.header._packet_type = ir_t_flash; 
     message.header._sender_id = pogobot_helper_getid();
@@ -324,6 +326,7 @@ int flash_robot(void)
 {
 	struct sfl_frame frame;
 	int failures;
+	uint8_t v2_mode = 0;
 	static const char str[] = SFL_MAGIC_REQ;
 	const char *c;
 	int ack_status;
@@ -463,13 +466,57 @@ int flash_robot(void)
 			case SFL_CMD_JUMP:
 				/* Reset failures */
 				failures = 0;
-                send_flash_message((char *)&frame, frame.payload_length + 4);
-				/* to be refined */ 
-				msleep(200);
+                // A versioned image is finalized by END; JUMP only exits the remote command.
+                if (!v2_mode) {
+                    send_flash_message((char *)&frame, frame.payload_length + 4);
+                    msleep(200);
+                }
 				/* Acknowledge and jump */
 				uart_write(SFL_ACK_SUCCESS);
                 return 0;
 				break;
+
+            case IR_V2_CMD_START:
+                if (frame.payload_length != IR_V2_START_LENGTH) {
+                    uart_write(SFL_ACK_ERROR);
+                    break;
+                }
+                failures = 0;
+                v2_mode = 1;
+                // Repeated START is safe and improves discovery; pause for sector erases.
+                for (uint8_t copy = 0; copy < 3; copy++) {
+                    send_flash_message((char *)&frame, frame.payload_length + 4);
+                    msleep(200);
+                }
+                msleep(3000);  // Conservative broadcast preparation for two 64 KiB erases.
+                uart_write(SFL_ACK_SUCCESS);
+                break;
+
+            case IR_V2_CMD_DATA:
+                if (!v2_mode || frame.payload_length < IR_V2_DATA_HEADER_LENGTH + 1 ||
+                    frame.payload_length > IR_V2_DATA_HEADER_LENGTH + IR_V2_CHUNK_SIZE) {
+                    uart_write(SFL_ACK_ERROR);
+                    break;
+                }
+                failures = 0;
+                send_flash_message((char *)&frame, frame.payload_length + 4);
+                msleep(200);
+                uart_write(SFL_ACK_SUCCESS);
+                break;
+
+            case IR_V2_CMD_END:
+            case IR_V2_CMD_ABORT:
+                if (!v2_mode || frame.payload_length != IR_V2_ID_LENGTH) {
+                    uart_write(SFL_ACK_ERROR);
+                    break;
+                }
+                failures = 0;
+                send_flash_message((char *)&frame, frame.payload_length + 4);
+                msleep(200);
+                uart_write(SFL_ACK_SUCCESS);
+                if (frame.cmd == IR_V2_CMD_ABORT)
+                    return 1;
+                break;
 
 			default:
 				/* Increment failures */
@@ -536,4 +583,3 @@ void update_led_status(void)
 
 	return;
 }
-

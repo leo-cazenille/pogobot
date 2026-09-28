@@ -20,8 +20,11 @@
 #define SPIFLASH_SECTOR_SIZE 65536u
 #define SFL_CMD_LOAD 1
 #define SFL_CMD_JUMP 2
-#define SFL_CMD_ABORT 3
+#define SFL_CMD_ABORT 0
 #define ir_t_flash 2
+#define IR_UPLOAD_FLASH_READ(offset) flash_bytes[offset]
+
+static uint8_t flash_bytes[SPIFLASH_SIZE];
 
 typedef struct { uint32_t hardware_value_at_time_origin; } time_reference_t;
 typedef struct {
@@ -84,9 +87,9 @@ void irq_setmask(unsigned int value);
 #define MAX_MESSAGES 1200
 static message_t messages[MAX_MESSAGES];
 static unsigned int message_count, message_read;
-static uint8_t flash_bytes[SPIFLASH_SIZE];
 static unsigned int sector_erases[SPIFLASH_SIZE / SPIFLASH_SECTOR_SIZE];
 static unsigned int chunk_writes[SPIFLASH_SIZE / 64];
+static uint32_t failed_program_address = UINT32_MAX;
 static uint32_t clock_us;
 static uint8_t hardware_fifo[700];
 static unsigned int hardware_count, hardware_read;
@@ -95,7 +98,7 @@ static unsigned int encoded_count, decoded_count;
 
 uint16_t crc16(const unsigned char *data, unsigned int length)
 {
-    uint16_t crc = 0xffff;
+    uint16_t crc = 0;  /* LiteX SFL uses CRC-16/CCITT with an all-zero seed. */
     for (unsigned int i = 0; i < length; i++) {
         crc ^= (uint16_t)data[i] << 8;
         for (int bit = 0; bit < 8; bit++)
@@ -128,7 +131,8 @@ void write_to_flash(uint32_t address, unsigned char *data, uint32_t length)
 {
     CHECK(address + length <= SPIFLASH_SIZE);
     for (uint32_t i = 0; i < length; i++)
-        flash_bytes[address + i] &= data[i];  /* NOR programming cannot set a zero bit. */
+        if (address + i != failed_program_address)
+            flash_bytes[address + i] &= data[i];  /* NOR cannot set a zero bit. */
     if (address >= IR_FLASH_START && address < IR_FLASH_END)
         chunk_writes[address / 64]++;
 }
@@ -209,7 +213,9 @@ static void reset_device(void)
     memset(chunk_writes, 0, sizeof(chunk_writes));
     reset_messages();
     clock_us = 0;
+    failed_program_address = UINT32_MAX;
     partial_known = 0;  /* A fresh test starts with a fresh robot boot. */
+    memset(&v2_upload, 0, sizeof(v2_upload));
     ir_uart_init();
 }
 
@@ -457,12 +463,303 @@ static void demonstrate_legacy_protocol_limits(void)
     append_jump();
     ir_boot_loop();
     CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-    CHECK(message_read == 0);
+    CHECK(upload_stats.accepted == 0);
     puts("KNOWN LIMIT: partial repair cannot resume after robot reboot");
 }
 
-int main(void)
+static void put_u16(uint8_t *p, uint16_t value)
+{ p[0] = value >> 8; p[1] = value; }
+
+static void put_u32(uint8_t *p, uint32_t value)
+{ p[0] = value >> 24; p[1] = value >> 16; p[2] = value >> 8; p[3] = value; }
+
+static void append_v2(uint8_t command, const uint8_t *payload, unsigned int length)
 {
+    CHECK(message_count < MAX_MESSAGES && length <= 255);
+    message_t *message = &messages[message_count++];
+    struct sfl_frame *frame = (struct sfl_frame *)message->payload;
+    memset(message, 0, sizeof(*message));
+    message->header._packet_type = ir_t_flash;
+    message->header.payload_length = length + 4;
+    frame->cmd = command;
+    frame->payload_length = length;
+    memcpy(frame->payload, payload, length);
+    uint16_t crc = crc16(&frame->cmd, length + 1);
+    frame->crc[0] = crc >> 8;
+    frame->crc[1] = crc;
+}
+
+static uint32_t generated_image_crc(uint32_t length)
+{
+    uint32_t crc = 0xffffffffu;
+    for (uint32_t i = 0; i < length; i++) {
+        crc ^= pattern(i / 64, i % 64);
+        for (unsigned int bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+static void append_v2_start(uint32_t id, uint32_t address, uint32_t length,
+                            uint32_t image_crc)
+{
+    uint8_t payload[IR_V2_START_LENGTH] = {0};
+    payload[0] = IR_V2_VERSION;
+    put_u32(payload + 2, id);
+    put_u32(payload + 6, address);
+    put_u32(payload + 10, length);
+    put_u16(payload + 14, IR_V2_CHUNK_SIZE);
+    put_u32(payload + 16, image_crc);
+    append_v2(IR_V2_CMD_START, payload, sizeof(payload));
+}
+
+static void append_v2_data(uint32_t id, uint16_t index, uint32_t image_length)
+{
+    uint8_t payload[IR_V2_DATA_HEADER_LENGTH + IR_V2_CHUNK_SIZE];
+    uint32_t remaining = image_length - (uint32_t)index * IR_V2_CHUNK_SIZE;
+    uint32_t count = remaining < IR_V2_CHUNK_SIZE ? remaining : IR_V2_CHUNK_SIZE;
+    put_u32(payload, id);
+    put_u16(payload + 4, index);
+    for (uint32_t i = 0; i < count; i++)
+        payload[IR_V2_DATA_HEADER_LENGTH + i] = pattern(index, i);
+    append_v2(IR_V2_CMD_DATA, payload, IR_V2_DATA_HEADER_LENGTH + count);
+}
+
+static void append_v2_end(uint32_t id)
+{
+    uint8_t payload[4];
+    put_u32(payload, id);
+    append_v2(IR_V2_CMD_END, payload, sizeof(payload));
+}
+
+static void append_v2_abort(uint32_t id)
+{
+    uint8_t payload[4];
+    put_u32(payload, id);
+    append_v2(IR_V2_CMD_ABORT, payload, sizeof(payload));
+}
+
+static void test_v2_reorder_and_short_tail(void)
+{
+    const uint32_t id = 0x12345678u;
+    const uint32_t length = 60u * 1024u - 7u;
+    const uint32_t crc = generated_image_crc(length);
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, crc);
+    for (unsigned int i = 1; i < 959; i++) {
+        if (i != 17) append_v2_data(id, i, length);
+        if (i == 300) append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, crc);
+    }
+    append_v2_data(id, 200, length);  /* Duplicate has no second flash write. */
+    append_v2_data(id, 959, length);  /* The last frame is 57 bytes. */
+    append_v2_data(id, 17, length);
+    append_v2_data(id, 0, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(v2_upload.received == 960 && upload_stats.duplicates == 1);
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    CHECK(chunk_writes[(0x60000u + 200u * 64u) / 64] == 1);
+    for (uint32_t i = 0; i < length; i++)
+        CHECK(flash_bytes[0x60000u + i] == pattern(i / 64, i % 64));
+
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, crc);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void test_v2_missing_tail_and_many_losses(void)
+{
+    const uint32_t id = 0xaabbccddu;
+    const uint32_t length = 129;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(v2_upload.received == 2);
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 2, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+
+    reset_device();
+    const uint32_t count = 33u * 64u;
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, count, generated_image_crc(count));
+    append_v2_data(id, 0, count);
+    append_v2_data(id, 32, count);
+    append_v2_end(id);  /* 31 missing chunks, including the middle of the image. */
+    ir_boot_loop();
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    reset_messages();
+    for (unsigned int i = 1; i < 32; i++) append_v2_data(id, i, count);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    assert_chunks(0, 33);
+}
+
+static void test_v2_rejected_data_and_restart(void)
+{
+    const uint32_t id = 0x11223344u;
+    const uint32_t length = 128;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x30000u, length, generated_image_crc(length));
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id + 1, 0, length);  /* Wrong transfer identity. */
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id + 1);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x30000u / SPIFLASH_SECTOR_SIZE] == 0);
+
+    reset_device();
+    failed_program_address = 0x60000u;
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.failed && !check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    failed_program_address = UINT32_MAX;
+    reset_messages();
+    append_v2_abort(id);
+    ir_boot_loop();
+    CHECK(!v2_upload.active);
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, 0);
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.failed && !check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void test_v2_metadata_and_reset(void)
+{
+    const uint32_t id = 0x01020304u;
+    const uint32_t length = 3u * 64u;
+    uint32_t crc = generated_image_crc(length);
+    reset_device();
+    memcpy(&flash_bytes[FLASH_OK_OFFSET], FLASH_IS_OK, strlen(FLASH_IS_OK));
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, crc);
+    append_v2_data(id, 1, length);  /* First chunk is missing. */
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(v2_upload.received == 1);
+
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, crc ^ 1u);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.received == 0);  /* Changed metadata must discard old bitmap. */
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 2);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    memset(&v2_upload, 0, sizeof(v2_upload));  /* Robot reset loses incomplete RAM state. */
+    reset_messages();
+    append_v2_start(id + 1, SPIFLASH_BASE + 0x60000u, length, crc);
+    for (unsigned int i = 0; i < 3; i++) append_v2_data(id + 1, i, length);
+    append_v2_end(id + 1);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 3);
+}
+
+static void test_v2_malformed_frames(void)
+{
+    const uint32_t id = 0x99887766u;
+    const uint32_t length = 65;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, IR_V2_SLOT_SIZE + 1,
+                    generated_image_crc(length));
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length,
+                    generated_image_crc(length));
+    messages[1].payload[4] = 2;  /* Unsupported protocol version; refresh inner CRC. */
+    struct sfl_frame *bad = (struct sfl_frame *)messages[1].payload;
+    uint16_t bad_crc = crc16(&bad->cmd, bad->payload_length + 1);
+    bad->crc[0] = bad_crc >> 8;
+    bad->crc[1] = bad_crc;
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length,
+                    generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    /* Reject an oversized last chunk even when its packet CRC is valid. */
+    append_v2_data(id, 1, length);
+    bad = (struct sfl_frame *)messages[message_count - 1].payload;
+    bad->payload_length++;
+    messages[message_count - 1].header.payload_length++;
+    bad_crc = crc16(&bad->cmd, bad->payload_length + 1);
+    bad->crc[0] = bad_crc >> 8;
+    bad->crc[1] = bad_crc;
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(upload_stats.malformed == 3);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void test_v2_max_image(void)
+{
+    const uint32_t id = 0x44556677u;
+    const uint32_t length = IR_V2_SLOT_SIZE;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    for (unsigned int i = 0; i < 1024; i++) append_v2_data(id, i, length);
+    ir_boot_loop();  /* A transfer round may stop without discarding its bitmap. */
+    CHECK(v2_upload.received == 1024);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    reset_messages();
+    for (unsigned int i = 1024; i < 2048; i++) append_v2_data(id, i, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.received == IR_V2_MAX_CHUNKS);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    CHECK(sector_erases[0x70000u / SPIFLASH_SECTOR_SIZE] == 1);
+    CHECK(flash_bytes[0x7ffffu] == pattern(2047, 63));
+}
+
+static void test_python_wire_fixture(const char *path)
+{
+    FILE *source = fopen(path, "rb");
+    CHECK(source != NULL);
+    reset_device();
+    for (;;) {
+        int command = fgetc(source);
+        if (command == EOF) break;
+        int length = fgetc(source);
+        uint8_t payload[255];
+        CHECK(length >= 0 && fread(payload, 1, length, source) == (size_t)length);
+        append_v2(command, payload, length);
+    }
+    CHECK(fclose(source) == 0);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    for (unsigned int i = 0; i < 65; i++)
+        CHECK(flash_bytes[0x60000u + i] == pattern(i / 64, i % 64));
+}
+
+int main(int argc, char **argv)
+{
+    CHECK(argc == 2);
     test_complete_image();
     test_ten_missing_and_duplicates();
     test_thirty_one_missing();
@@ -473,6 +770,13 @@ int main(void)
     test_uart_full_ring();
     test_slip_overflow_resync();
     demonstrate_legacy_protocol_limits();
+    test_v2_reorder_and_short_tail();
+    test_v2_missing_tail_and_many_losses();
+    test_v2_rejected_data_and_restart();
+    test_v2_metadata_and_reset();
+    test_v2_malformed_frames();
+    test_v2_max_image();
+    test_python_wire_fixture(argv[1]);
     puts("IR upload host fault injection: PASS");
     return 0;
 }

@@ -21,6 +21,7 @@
 #include <sfl.h>
 #include <boot.h>
 #include <ir_boot.h>
+#include <ir_upload_v2.h>
 #include <ir_uart.h>
 #include <libbase/crc.h>
 #include <libbase/spiflash.h>
@@ -56,6 +57,20 @@ static struct {
     uint32_t erase_us;
     uint32_t write_us;
 } upload_stats;
+
+/* One versioned image fits either 128 KiB user slot and needs at most 256 bitmap bytes. */
+static struct {
+    uint32_t id;
+    uint32_t offset;
+    uint32_t length;
+    uint32_t expected_crc;
+    uint16_t chunks;
+    uint16_t received;
+    uint8_t active;
+    uint8_t failed;
+    uint8_t complete;
+    uint8_t bitmap[(IR_V2_MAX_CHUNKS + 7) / 8];
+} v2_upload;
 
 static int missing_index(uint32_t addr)
 {
@@ -114,6 +129,172 @@ static void time_write(uint32_t addr, unsigned char *data, uint32_t length)
     pogobot_stopwatch_reset(&timer);
     write_to_flash(addr, data, length);
     upload_stats.write_us += pogobot_stopwatch_get_elapsed_microseconds(&timer);
+}
+
+#ifndef IR_UPLOAD_FLASH_READ
+// SPI flash is memory-mapped on the robot; tests can substitute a simulated NOR byte.
+#define IR_UPLOAD_FLASH_READ(offset) \
+    (*(volatile const uint8_t *)(uintptr_t)(SPIFLASH_BASE + (offset)))
+#endif
+
+static uint32_t v2_flash_crc32(uint32_t offset, uint32_t length)
+{
+    // Reflected CRC-32/ISO-HDLC, matching Python's zlib.crc32 over exact image bytes.
+    uint32_t crc = 0xffffffffu;
+    for (uint32_t i = 0; i < length; i++) {
+        crc ^= IR_UPLOAD_FLASH_READ(offset + i);
+        for (uint8_t bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+static uint8_t v2_command(uint8_t cmd)
+{
+    return cmd >= IR_V2_CMD_START && cmd <= IR_V2_CMD_ABORT;
+}
+
+static uint8_t exec_v2_frame(struct sfl_frame *frame)
+{
+    const uint8_t *p = frame->payload;
+    uint32_t id;
+
+    if (frame->cmd == IR_V2_CMD_START) {
+        uint32_t address, offset, length, expected_crc;
+        if (frame->payload_length != IR_V2_START_LENGTH ||
+            p[0] != IR_V2_VERSION || p[1] != 0 ||
+            ir_v2_read_u16(p + 14) != IR_V2_CHUNK_SIZE) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        id = ir_v2_read_u32(p + 2);
+        address = ir_v2_read_u32(p + 6);
+        length = ir_v2_read_u32(p + 10);
+        expected_crc = ir_v2_read_u32(p + 16);
+        if (address < SPIFLASH_BASE || length == 0 || length > IR_V2_SLOT_SIZE) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        offset = address - SPIFLASH_BASE;
+        // Only whole user slots are valid destinations; subtraction avoids wraparound.
+        if ((offset != IR_FLASH_START && offset != 0x60000u) ||
+            offset >= SPIFLASH_SIZE || length > SPIFLASH_SIZE - offset ||
+            length > IR_V2_SLOT_SIZE) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        if (v2_upload.active && v2_upload.id == id &&
+            v2_upload.offset == offset && v2_upload.length == length &&
+            v2_upload.expected_crc == expected_crc)
+            return 0;  // A repeated START preserves the completed bitmap.
+
+        memset(&v2_upload, 0, sizeof(v2_upload));
+        time_erase_marker();
+        flash_state_partial = 0;
+        partial_known = 0;
+        // Erase all image sectors before accepting DATA, including a lost first chunk.
+        uint32_t first = offset / SPIFLASH_SECTOR_SIZE;
+        uint32_t last = (offset + length - 1) / SPIFLASH_SECTOR_SIZE;
+        for (uint32_t sector = first; sector <= last; sector++)
+            time_erase_sector(sector * SPIFLASH_SECTOR_SIZE);
+        v2_upload.id = id;
+        v2_upload.offset = offset;
+        v2_upload.length = length;
+        v2_upload.expected_crc = expected_crc;
+        v2_upload.chunks = (length + IR_V2_CHUNK_SIZE - 1) / IR_V2_CHUNK_SIZE;
+        v2_upload.active = 1;
+        printf("IR v2 START: id=%08lx bytes=%lu chunks=%u\n",
+               (unsigned long)id, (unsigned long)length,
+               (unsigned int)v2_upload.chunks);
+        return 0;
+    }
+
+    if (frame->payload_length < IR_V2_ID_LENGTH) {
+        upload_stats.malformed++;
+        return 0;
+    }
+    id = ir_v2_read_u32(p);
+    if (!v2_upload.active || id != v2_upload.id)
+        return 0;  // Stale frames must not affect an active image.
+
+    if (frame->cmd == IR_V2_CMD_DATA) {
+        uint16_t index;
+        uint32_t relative, length, offset;
+        uint8_t mask;
+        if (frame->payload_length < IR_V2_DATA_HEADER_LENGTH + 1 ||
+            frame->payload_length > IR_V2_DATA_HEADER_LENGTH + IR_V2_CHUNK_SIZE) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        index = ir_v2_read_u16(p + 4);
+        if (index >= v2_upload.chunks) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        relative = (uint32_t)index * IR_V2_CHUNK_SIZE;
+        length = v2_upload.length - relative;
+        if (length > IR_V2_CHUNK_SIZE)
+            length = IR_V2_CHUNK_SIZE;
+        if (frame->payload_length != IR_V2_DATA_HEADER_LENGTH + length) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        mask = 1u << (index & 7u);
+        if (v2_upload.bitmap[index >> 3] & mask) {
+            upload_stats.duplicates++;
+            return 0;
+        }
+        if (v2_upload.failed || v2_upload.complete)
+            return 0;
+        offset = v2_upload.offset + relative;
+        time_write(offset, &frame->payload[IR_V2_DATA_HEADER_LENGTH], length);
+        // A failed NOR write cannot be repaired by programming more zero bits.
+        for (uint32_t i = 0; i < length; i++) {
+            if (IR_UPLOAD_FLASH_READ(offset + i) != p[IR_V2_DATA_HEADER_LENGTH + i]) {
+                v2_upload.failed = 1;
+                printf("IR v2 flash readback failed at %08lx; restart required\n",
+                       (unsigned long)(offset + i));
+                return 0;
+            }
+        }
+        v2_upload.bitmap[index >> 3] |= mask;
+        v2_upload.received++;
+        upload_stats.accepted++;
+        return 0;
+    }
+
+    if (frame->payload_length != IR_V2_ID_LENGTH) {
+        upload_stats.malformed++;
+        return 0;
+    }
+    if (frame->cmd == IR_V2_CMD_ABORT) {
+        time_erase_marker();
+        memset(&v2_upload, 0, sizeof(v2_upload));
+        printf("IR v2 transfer aborted\n");
+        return 1;
+    }
+    if (v2_upload.complete)
+        return 1;  // Repeated END has no flash side effects.
+    if (v2_upload.failed) {
+        printf("IR v2 transfer failed; send ABORT then START to restart\n");
+        return 1;
+    }
+    if (v2_upload.received != v2_upload.chunks) {
+        printf("IR v2 incomplete: %u of %u chunks\n",
+               (unsigned int)v2_upload.received, (unsigned int)v2_upload.chunks);
+        return 0;
+    }
+    uint32_t actual_crc = v2_flash_crc32(v2_upload.offset, v2_upload.length);
+    if (actual_crc != v2_upload.expected_crc) {
+        v2_upload.failed = 1;
+        printf("IR v2 image CRC mismatch: %08lx != %08lx; restart required\n",
+               (unsigned long)actual_crc, (unsigned long)v2_upload.expected_crc);
+        return 1;
+    }
+    time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_OK, strlen(FLASH_IS_OK));
+    v2_upload.complete = 1;
+    printf("IR v2 image verified and complete\n");
+    return 1;
 }
 
 uint8_t check_crc(struct sfl_frame* frame) {
@@ -296,7 +477,7 @@ static uint8_t exec_frame_cmd(struct sfl_frame *frame)
 
 void ir_boot_loop(void) {
     time_reference_t mytimer;
-    const uint32_t timeout = 2000000;  // in microseconds
+    uint32_t timeout = 2000000;  // The versioned mode allows longer erase preparation.
     struct sfl_frame * frame;
     message_t msg;
     slip_error_counter_s slip_start[IR_RX_COUNT];
@@ -304,6 +485,7 @@ void ir_boot_loop(void) {
     uint32_t queue_drop_start;
     uint32_t malformed_start;
     uint8_t stopped = 0;
+    uint8_t legacy_blocked;
 
     memset(&upload_stats, 0, sizeof(upload_stats));
     next_addr = 0;
@@ -313,26 +495,22 @@ void ir_boot_loop(void) {
     rgb_blink_set_time(5, 95);                      // Flash 5 ms every 100ms
     rgb_blink_set_color(0, 0, 50);                  // Tel the user data is being received
 
-    pogobot_timer_init(&mytimer, timeout);          // Set a timeout
-
     flash_state_partial = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET);
-    if (check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET)) {
-        // you need to erase the user prog before programming
-        rgb_blink_set_time(5, 995);
-        update_led_status();
-        return;
-    }
+    legacy_blocked = check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET) ||
+                     v2_upload.active;
+    if (v2_upload.active)
+        timeout = 8000000;
+    pogobot_timer_init(&mytimer, timeout);
 
     if (flash_state_partial) {
         // The address list is RAM-only; a reboot cannot safely resume a partial image.
         if (!partial_known) {
             printf("Partial image has no recoverable address list; erase and restart upload\n");
-            rgb_blink_set_time(5, 995);
-            update_led_status();
-            return;
+            legacy_blocked = 1;
+        } else {
+            started = 1;
+            missing_total = missing_count;
         }
-        started = 1;
-        missing_total = missing_count;
     } else {
         partial_known = 0;
         missing_count = 0;
@@ -377,7 +555,16 @@ void ir_boot_loop(void) {
                 upload_stats.crc_errors++;
                 continue;
             }
-            if (exec_frame_cmd(frame)) {
+            if (v2_command(frame->cmd)) {
+                legacy_blocked = 1;
+                timeout = 8000000;
+                if (exec_v2_frame(frame)) {
+                    stopped = 1;
+                    break;
+                }
+                // Start/erase may take time; wait for the host's preparation pause.
+                pogobot_timer_init(&mytimer, timeout);
+            } else if (!legacy_blocked && exec_frame_cmd(frame)) {
                 stopped = 1;
                 break;
             }

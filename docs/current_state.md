@@ -53,8 +53,18 @@ frame spans two sectors. The Pogobios v3 cross-build succeeds with RISC-V GCC
 
 Host probes also confirm legacy protocol limits: a missing final chunk can
 still set `FlashIsOK`; a replacement chunk from another image can complete
-a partial transfer; and repair cannot resume after reboot. Image length,
-transfer identity, and full-image verification require Phase 2 metadata.
+a partial transfer; and repair cannot resume after reboot. The new Phase 2
+mode uses metadata and image CRC to address the first two limits.
+
+Phase 2 now adds versioned START/DATA/END/ABORT SFL frames, a 256-byte maximum
+receive bitmap, flash readback after each chunk, and exact-image CRC-32 before
+`FlashIsOK`. The PC uploader selects this mode explicitly with `--ir-v2`, and
+the remote forwards the new commands with a provisional three-second erase
+pause. Host fault injection passes for reordered chunks, missing first and last
+chunks, 31 losses, the 128 KiB size limit, metadata changes, readback failure,
+CRC mismatch, and a
+Python-generated wire fixture. Robot and remote Pogobios v3 builds succeed.
+Robot delivery, timing, and per-robot completion remain unverified on hardware.
 
 Other local changes include `Software/pogosoc.py` and an untracked hardware
 history directory. Their contents are outside this verification work.
@@ -78,9 +88,8 @@ performed.
 
 ## Next concrete tasks
 
-1. Validate failure, partial recovery, duplicates, and all four 64 KiB erase
-   sectors on suitable hardware before flashing production robots.
+1. Validate Phase 2 flash readback, CRC, incomplete marker state, and the
+   provisional erase pause on suitable hardware before production use.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
-3. Use those measurements to choose Phase 2 bitmap behavior and later repetition
-   or FEC parameters.
+3. Use those measurements to choose Phase 3 repetition and later FEC parameters.

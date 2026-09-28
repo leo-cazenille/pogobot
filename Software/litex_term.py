@@ -19,6 +19,9 @@ import multiprocessing
 import argparse
 import json
 import socket
+import secrets
+
+from ir_upload_v2 import image_frames, abort_payload, CMD_START, CMD_ABORT
 
 # Console ------------------------------------------------------------------------------------------
 
@@ -285,7 +288,7 @@ def crc16(l):
 # LiteXTerm ----------------------------------------------------------------------------------------
 
 class LiteXTerm:
-    def __init__(self, serial_boot, kernel_image, kernel_address, json_images, safe, debug, delay, IR):
+    def __init__(self, serial_boot, kernel_image, kernel_address, json_images, safe, debug, delay, IR, ir_v2=False):
         self.serial_boot = serial_boot
         assert not (kernel_image is not None and json_images is not None)
         self.mem_regions = {}
@@ -299,6 +302,9 @@ class LiteXTerm:
                 self.mem_regions[os.path.join(json_dir, k)] = v
             self.boot_address = self.mem_regions[list(self.mem_regions.keys())[-1]]
             f.close()
+
+        if ir_v2 and len(self.mem_regions) != 1:
+            raise ValueError("--ir-v2 requires exactly one --kernel or --images entry")
 
         self.reader_alive = False
         self.writer_alive = False
@@ -319,6 +325,7 @@ class LiteXTerm:
         self.debug = debug
         self.delay = delay
         self.IR    = IR
+        self.ir_v2 = ir_v2
 
     def open(self, port, baudrate):
         if hasattr(self, "port"):
@@ -518,8 +525,33 @@ class LiteXTerm:
         f.close()
         return length
 
+    def upload_v2(self, filename, address):
+        # A single in-memory image gives START and final CRC identical bytes.
+        with open(filename, "rb") as source:
+            image = source.read()
+        transfer_id = secrets.randbits(32)
+        frames = image_frames(image, address, transfer_id)
+        print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, {len(image)} bytes")
+        started = False
+        try:
+            for command, payload in frames:
+                frame = SFLFrame()
+                frame.cmd, frame.payload = command, payload
+                if not self.send_frame(frame):
+                    raise IOError("remote rejected IR v2 frame")
+                if command == CMD_START:
+                    started = True
+        except Exception:
+            if started:
+                abort = SFLFrame()
+                abort.cmd, abort.payload = CMD_ABORT, abort_payload(transfer_id)
+                self.send_frame(abort)
+            raise
+        print("[LXTERM] Sent image to remote; robot completion requires its own status check.")
+        return len(image)
+
     def boot(self):
-        print("[LXTERM] Booting the device.")
+        print("[LXTERM] Closing remote transfer." if self.ir_v2 else "[LXTERM] Booting the device.")
         frame = SFLFrame()
         frame.cmd = sfl_cmd_jump
         frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
@@ -548,7 +580,10 @@ class LiteXTerm:
         if(len(self.mem_regions)):
             self.port.write(sfl_magic_ack)
         for filename, base in self.mem_regions.items():
-            self.upload(filename, int(base, 16))
+            if self.ir_v2:
+                self.upload_v2(filename, int(base, 16))
+            else:
+                self.upload(filename, int(base, 16))
         self.boot()
         print("[LXTERM] Done.")
 
@@ -630,6 +665,7 @@ def _get_args():
     parser.add_argument("--serial-boot",  default=False, action='store_true', help="Automatically initiate serial boot")
     parser.add_argument("--debug",        default=False, action='store_true', help="Hexdump serial boot frames sent")
     parser.add_argument("--IR",           default=False, action='store_true', help="Set timings for Infrared")
+    parser.add_argument("--ir-v2",        default=False, action='store_true', help="Use versioned IR image verification through a matching remote and robot")
     parser.add_argument("--delay",        default="0",                        help="Delay between each frame during serialboot")
     parser.add_argument("--kernel",       default=None,                       help="Kernel image")
     parser.add_argument("--kernel-adr",   default="0x40000000",               help="Kernel address")
@@ -649,7 +685,7 @@ def main():
     args = _get_args()
     delay = None if args.delay is None else float(args.delay)
     IR=args.IR
-    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images, args.safe, args.debug, delay, IR)
+    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images, args.safe, args.debug, delay, IR, args.ir_v2)
 
     if sys.platform == "win32":
         if args.port in ["bridge", "jtag"]:

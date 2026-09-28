@@ -2,8 +2,8 @@
 
 Date: 2026-09-28
 
-Status: Phase 1 software and host verification complete; robot validation and
-Phases 2–5 pending.
+Status: Phases 1–2 software and host verification complete; robot validation
+and Phases 3–5 pending.
 
 ## Phase commit record
 
@@ -91,6 +91,17 @@ during partial recovery remain outside Phase 1's guarantees.
 Define a versioned upload mode with the following conceptual messages. Choose
 wire identifiers and fixed-width encodings during implementation.
 
+Phase 2 uses SFL commands `0x10` START, `0x11` DATA, `0x12` END, and `0x13`
+ABORT. All fields are big-endian. START is 20 bytes: version 1 (1 byte), flags
+zero (1), transfer ID (4), CPU-mapped destination (4), exact image length (4),
+chunk size 64 (2), and image CRC-32 (4). DATA is transfer ID (4), chunk index
+(2), and 1–64 actual image bytes; only the last chunk may be short. END and
+ABORT each carry the transfer ID (4). The existing SFL CRC-16 covers command
+and payload; outer IR SLIP CRC-32 protects the transported message. The image
+CRC uses CRC-32/ISO-HDLC over exact flash bytes, matching Python `zlib.crc32`.
+Only one image of 1–131072 bytes at mapped address `0x240000` or `0x260000` is
+accepted per transfer. Transfer IDs are random 32-bit values chosen by the PC.
+
 | Message | Required information and purpose |
 | --- | --- |
 | `START` | Protocol version, transfer/image identity, destination, exact byte length, chunk size, expected whole-image CRC-32, and optional FEC parameters. |
@@ -110,21 +121,20 @@ restart operation for an image whose final flash verification fails.
 
 ### Receiver state and flash lifecycle
 
-- [ ] Track expected chunks with one bit per successfully programmed chunk.
+- [x] Track expected chunks with one bit per successfully programmed chunk.
       Mark a bit after the write succeeds and the selected readback check passes.
-- [ ] Derive completion from the expected bitmap, including the last short chunk.
+- [x] Derive completion from the expected bitmap, including the last short chunk.
       Ignore already accepted chunks regardless of arrival order.
-- [ ] Invalidate the old image before modifying its contents. Erase all required
+- [x] Invalidate the old image before modifying its contents. Erase all required
       sectors once at transfer start, independently of individual data chunks.
-- [ ] Establish an erase preparation period before data transmission. Use a
-      measured conservative delay for broadcasts without feedback; use readiness
-      responses where the return link supports them. Repeated starts must not
-      trigger another erase of the active image.
-- [ ] Preserve incomplete progress across retransmission rounds for the same
+- [x] Establish an erase preparation period before data transmission. The
+      remote currently uses a provisional three-second pause; measure and tune
+      it on hardware. Repeated starts do not erase an active matching image.
+- [x] Preserve incomplete progress across retransmission rounds for the same
       transfer. Make repeated completion messages safe.
-- [ ] Before writing `FlashIsOK`, require the complete bitmap and compare a CRC-32
+- [x] Before writing `FlashIsOK`, require the complete bitmap and compare a CRC-32
       computed from the exact image bytes in flash with the expected CRC.
-- [ ] On timeout or abort, retain an invalid image. On reset, restart an incomplete
+- [x] On timeout or abort, retain an invalid image. On reset, restart an incomplete
       transfer unless progress metadata is deliberately persisted in a later design.
 
 Bitmap storage is small:
@@ -141,6 +151,15 @@ Use the permitted flash layout to set the supported image limit. The local
 Acceptance: missing first or last chunks, more than nine losses, arbitrary
 duplicates, and reordered chunks are handled correctly. Only a complete image
 whose contents match the expected CRC is marked valid.
+
+Host verification runs through `Software/tests/run_ir_upload_fault_test.py`.
+The harness exercises production receiver code using Python-generated wire
+payloads, reordered and repeated chunks, short final chunks, 31 missing chunks,
+the 128 KiB size limit, metadata changes, reboot restart, malformed frames,
+readback failure, and CRC
+mismatch. Both robot and remote Pogobios targets cross-build. The remote's
+serial ACK still does not confirm reception by a robot; Phase 5 feedback is
+needed for per-robot completion status.
 
 ## Phase 3: add configurable repetition and measured pacing
 
