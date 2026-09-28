@@ -14,6 +14,7 @@ that the feature has been tested on hardware.
 | Phase | Final software commit | Host verification | Robot validation |
 | --- | --- | --- | --- |
 | 1 | `6afb76846663270bf2411c1b27728e18ab1f6b65` | Passed fault injection and v3 cross-build | Pending |
+| 2 | `114aee58537c345d4a89f17201344179012bc97e` | Passed versioned fault injection and robot/remote v3 cross-builds | Pending |
 
 ## Objective
 
