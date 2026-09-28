@@ -10,5 +10,7 @@
   robot overview, schematics, parts, and accessories.
 - [Expert software guide](../Software/readme.md), [SDK guide](../Software/sdk/Readme.md),
   and [IR remote guide](../readme-irRemote.md): build and operating workflows.
+- [Firmware integrity example](../Software/example/firmware_integrity/README.md):
+  a 50–60 KiB upload image with an on-robot flash CRC check.
 - [API reference](../pogodocs.md) and [SDK 2.7 notes](../Software/SDK_2_7.md):
   application functions and release changes.

@@ -13,6 +13,8 @@ snapshot, including local changes.
 - The user-provided log of a failed Pogowall or Pogoshower firmware upload.
 - Host fault injection of the production IR upload, UART ring, and SLIP decoder
   sources in `Software/tests/ir_upload_fault_test.c`.
+- The example build rules, v3 linker flash bounds, and startup copy path for
+  a firmware self-integrity test.
 
 ## Understood
 
@@ -87,6 +89,14 @@ over-capacity group, short final chunks, later-pass repair, CRC mismatch, and
 a 64 KiB image. Robot and remote v3 cross-builds succeed. Hardware decoder
 timing, receive drops during decoding, and completion rate remain unknown.
 
+The `firmware_integrity` example seals a linked application with a
+deterministic flash-only payload and a CRC-32 trailer. The robot scans the
+complete installed image and reports PASS/FAIL by serial and LED. Its default
+v3 build is 57,544 bytes (56.2 KiB); changing `PAYLOAD_BYTES` reseals without
+recompilation. Cross-build, ELF/raw boundary check, and host CRC corruption
+check pass. A damaged image may fail before the checker can run, and hardware
+execution has not yet been tested.
+
 Other local changes include `Software/pogosoc.py` and an untracked hardware
 history directory. Their contents are outside this verification work.
 
@@ -121,3 +131,5 @@ performed.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under
    matched conditions. Use completion, decoder timing, and loss counters to
    tune pacing and decide whether return-link feedback is useful.
+4. Upload `Software/example/firmware_integrity` as a 50–60 KiB image and record
+   its on-robot PASS/FAIL result alongside the receiver diagnostics.
