@@ -60,6 +60,9 @@ static struct {
     uint32_t write_max_us;
     uint32_t process_us;
     uint32_t process_max_us;
+    uint32_t fec_recovered;
+    uint32_t fec_decode_us;
+    uint32_t fec_decode_max_us;
 } upload_stats;
 
 /* One versioned image fits either 128 KiB user slot and needs at most 256 bitmap bytes. */
@@ -73,8 +76,54 @@ static struct {
     uint8_t active;
     uint8_t failed;
     uint8_t complete;
+    uint8_t fec_enabled;
+    uint8_t fec_mask;
+    uint16_t fec_group;
+    uint8_t fec_parity[IR_V2_FEC_PARITY_COUNT][IR_V2_CHUNK_SIZE];
     uint8_t bitmap[(IR_V2_MAX_CHUNKS + 7) / 8];
 } v2_upload;
+
+/* Cauchy matrix c[row][data] = inverse(data XOR (16 + row)) in GF(256).
+ * The primitive polynomial is x^8+x^4+x^3+x^2+1 (0x11d). */
+static const uint8_t fec_coefficients[IR_V2_FEC_PARITY_COUNT][IR_V2_FEC_DATA_COUNT] = {
+    {0xd8, 0x72, 0xc0, 0x58, 0xe0, 0x3e, 0x4c, 0x66,
+     0x90, 0xde, 0x55, 0x80, 0xa0, 0x83, 0x4b, 0x2a},
+    {0x72, 0xd8, 0x58, 0xc0, 0x3e, 0xe0, 0x66, 0x4c,
+     0xde, 0x90, 0x80, 0x55, 0x83, 0xa0, 0x2a, 0x4b},
+    {0xc0, 0x58, 0xd8, 0x72, 0x4c, 0x66, 0xe0, 0x3e,
+     0x55, 0x80, 0x90, 0xde, 0x4b, 0x2a, 0xa0, 0x83},
+    {0x58, 0xc0, 0x72, 0xd8, 0x66, 0x4c, 0x3e, 0xe0,
+     0x80, 0x55, 0xde, 0x90, 0x2a, 0x4b, 0x83, 0xa0},
+};
+
+static uint8_t fec_gf_multiply(uint8_t a, uint8_t b)
+{
+    uint8_t product = 0;
+    for (uint8_t bit = 0; bit < 8; bit++) {
+        if (b & 1u)
+            product ^= a;
+        uint8_t carry = a & 0x80u;
+        a <<= 1;
+        if (carry)
+            a ^= 0x1du;
+        b >>= 1;
+    }
+    return product;
+}
+
+static uint8_t fec_gf_inverse(uint8_t value)
+{
+    /* Every nonzero GF(256) element has inverse value^254. */
+    uint8_t result = 1;
+    uint8_t exponent = 254;
+    while (exponent) {
+        if (exponent & 1u)
+            result = fec_gf_multiply(result, value);
+        value = fec_gf_multiply(value, value);
+        exponent >>= 1;
+    }
+    return result;
+}
 
 static int missing_index(uint32_t addr)
 {
@@ -167,7 +216,132 @@ static uint32_t v2_flash_crc32(uint32_t offset, uint32_t length)
 
 static uint8_t v2_command(uint8_t cmd)
 {
-    return cmd >= IR_V2_CMD_START && cmd <= IR_V2_CMD_ABORT;
+    return cmd >= IR_V2_CMD_START && cmd <= IR_V2_CMD_PARITY;
+}
+
+static void v2_try_fec_recover(void)
+{
+    uint16_t first = v2_upload.fec_group * IR_V2_FEC_DATA_COUNT;
+    uint8_t missing[IR_V2_FEC_PARITY_COUNT];
+    uint8_t rows[IR_V2_FEC_PARITY_COUNT];
+    uint8_t matrix[IR_V2_FEC_PARITY_COUNT][IR_V2_FEC_PARITY_COUNT] = {{0}};
+    uint8_t residual[IR_V2_FEC_PARITY_COUNT][IR_V2_CHUNK_SIZE];
+    uint8_t missing_count = 0, row_count = 0;
+    time_reference_t timer;
+
+    if (!v2_upload.fec_enabled || !v2_upload.fec_mask ||
+        v2_upload.failed || v2_upload.complete || first >= v2_upload.chunks)
+        return;
+
+    for (uint8_t local = 0; local < IR_V2_FEC_DATA_COUNT &&
+                            first + local < v2_upload.chunks; local++) {
+        uint16_t index = first + local;
+        if (!(v2_upload.bitmap[index >> 3] & (1u << (index & 7u)))) {
+            if (missing_count == IR_V2_FEC_PARITY_COUNT)
+                return;  // More than four erasures need a later pass.
+            missing[missing_count++] = local;
+        }
+    }
+    if (!missing_count)
+        return;
+    for (uint8_t row = 0; row < IR_V2_FEC_PARITY_COUNT; row++) {
+        if (v2_upload.fec_mask & (1u << row))
+            rows[row_count++] = row;
+        if (row_count == missing_count)
+            break;
+    }
+    if (row_count < missing_count)
+        return;
+
+    // Subtract accepted data read from flash; absent final-group symbols are
+    // zero padding and never contribute to a parity equation.
+    pogobot_stopwatch_reset(&timer);
+    for (uint8_t equation = 0; equation < missing_count; equation++) {
+        uint8_t row = rows[equation];
+        memcpy(residual[equation], v2_upload.fec_parity[row], IR_V2_CHUNK_SIZE);
+        for (uint8_t column = 0; column < missing_count; column++)
+            matrix[equation][column] = fec_coefficients[row][missing[column]];
+        for (uint8_t local = 0; local < IR_V2_FEC_DATA_COUNT &&
+                                first + local < v2_upload.chunks; local++) {
+            uint16_t index = first + local;
+            if (!(v2_upload.bitmap[index >> 3] & (1u << (index & 7u))))
+                continue;
+            uint32_t relative = (uint32_t)index * IR_V2_CHUNK_SIZE;
+            uint32_t available = v2_upload.length - relative;
+            uint8_t coefficient = fec_coefficients[row][local];
+            if (available > IR_V2_CHUNK_SIZE)
+                available = IR_V2_CHUNK_SIZE;
+            for (uint32_t byte = 0; byte < available; byte++) {
+                uint8_t value = IR_UPLOAD_FLASH_READ(v2_upload.offset + relative + byte);
+                residual[equation][byte] ^= fec_gf_multiply(coefficient, value);
+            }
+        }
+    }
+
+    // Gauss-Jordan elimination solves at most four equations of 64 bytes.
+    // The Cauchy matrix guarantees a pivot for every valid erasure pattern.
+    for (uint8_t pivot = 0; pivot < missing_count; pivot++) {
+        uint8_t selected = pivot;
+        while (selected < missing_count && !matrix[selected][pivot])
+            selected++;
+        if (selected == missing_count)
+            return;
+        if (selected != pivot) {
+            for (uint8_t column = 0; column < missing_count; column++) {
+                uint8_t value = matrix[pivot][column];
+                matrix[pivot][column] = matrix[selected][column];
+                matrix[selected][column] = value;
+            }
+            for (uint8_t byte = 0; byte < IR_V2_CHUNK_SIZE; byte++) {
+                uint8_t value = residual[pivot][byte];
+                residual[pivot][byte] = residual[selected][byte];
+                residual[selected][byte] = value;
+            }
+        }
+        uint8_t inverse = fec_gf_inverse(matrix[pivot][pivot]);
+        for (uint8_t column = pivot; column < missing_count; column++)
+            matrix[pivot][column] = fec_gf_multiply(matrix[pivot][column], inverse);
+        for (uint8_t byte = 0; byte < IR_V2_CHUNK_SIZE; byte++)
+            residual[pivot][byte] = fec_gf_multiply(residual[pivot][byte], inverse);
+        for (uint8_t row = 0; row < missing_count; row++) {
+            if (row == pivot)
+                continue;
+            uint8_t factor = matrix[row][pivot];
+            for (uint8_t column = pivot; column < missing_count; column++)
+                matrix[row][column] ^= fec_gf_multiply(factor, matrix[pivot][column]);
+            for (uint8_t byte = 0; byte < IR_V2_CHUNK_SIZE; byte++)
+                residual[row][byte] ^= fec_gf_multiply(factor, residual[pivot][byte]);
+        }
+    }
+    uint32_t decode_us = pogobot_stopwatch_get_elapsed_microseconds(&timer);
+    upload_stats.fec_decode_us += decode_us;
+    if (decode_us > upload_stats.fec_decode_max_us)
+        upload_stats.fec_decode_max_us = decode_us;
+
+    // Commit only solved data bytes. Flash readback and the final exact-image
+    // CRC still guard validity, including a short last chunk.
+    for (uint8_t slot = 0; slot < missing_count; slot++) {
+        uint16_t index = first + missing[slot];
+        uint32_t relative = (uint32_t)index * IR_V2_CHUNK_SIZE;
+        uint32_t length = v2_upload.length - relative;
+        uint32_t offset = v2_upload.offset + relative;
+        if (length > IR_V2_CHUNK_SIZE)
+            length = IR_V2_CHUNK_SIZE;
+        time_write(offset, residual[slot], length);
+        for (uint32_t byte = 0; byte < length; byte++) {
+            if (IR_UPLOAD_FLASH_READ(offset + byte) != residual[slot][byte]) {
+                v2_upload.failed = 1;
+                printf("IR v2 FEC readback failed at %08lx; restart required\n",
+                       (unsigned long)(offset + byte));
+                return;
+            }
+        }
+        v2_upload.bitmap[index >> 3] |= 1u << (index & 7u);
+        v2_upload.received++;
+        upload_stats.accepted++;
+        upload_stats.fec_recovered++;
+    }
+    v2_upload.fec_mask = 0;
 }
 
 static uint8_t exec_v2_frame(struct sfl_frame *frame)
@@ -178,7 +352,8 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
     if (frame->cmd == IR_V2_CMD_START) {
         uint32_t address, offset, length, expected_crc;
         if (frame->payload_length != IR_V2_START_LENGTH ||
-            p[0] != IR_V2_VERSION || p[1] != 0 ||
+            p[0] != IR_V2_VERSION ||
+            (p[1] != 0 && p[1] != IR_V2_FLAG_FEC16X4) ||
             ir_v2_read_u16(p + 14) != IR_V2_CHUNK_SIZE) {
             upload_stats.malformed++;
             return 0;
@@ -201,7 +376,8 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         }
         if (v2_upload.active && v2_upload.id == id &&
             v2_upload.offset == offset && v2_upload.length == length &&
-            v2_upload.expected_crc == expected_crc)
+            v2_upload.expected_crc == expected_crc &&
+            v2_upload.fec_enabled == (p[1] == IR_V2_FLAG_FEC16X4))
             return 0;  // A repeated START preserves the completed bitmap.
 
         memset(&v2_upload, 0, sizeof(v2_upload));
@@ -218,10 +394,11 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         v2_upload.length = length;
         v2_upload.expected_crc = expected_crc;
         v2_upload.chunks = (length + IR_V2_CHUNK_SIZE - 1) / IR_V2_CHUNK_SIZE;
+        v2_upload.fec_enabled = (p[1] == IR_V2_FLAG_FEC16X4);
         v2_upload.active = 1;
-        printf("IR v2 START: id=%08lx bytes=%lu chunks=%u\n",
+        printf("IR v2 START: id=%08lx bytes=%lu chunks=%u fec=%u\n",
                (unsigned long)id, (unsigned long)length,
-               (unsigned int)v2_upload.chunks);
+               (unsigned int)v2_upload.chunks, (unsigned int)v2_upload.fec_enabled);
         return 0;
     }
 
@@ -276,6 +453,41 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         v2_upload.bitmap[index >> 3] |= mask;
         v2_upload.received++;
         upload_stats.accepted++;
+        if (v2_upload.fec_mask &&
+            v2_upload.fec_group == index / IR_V2_FEC_DATA_COUNT)
+            v2_try_fec_recover();
+        return 0;
+    }
+
+    if (frame->cmd == IR_V2_CMD_PARITY) {
+        uint16_t group;
+        uint8_t row;
+        if (frame->payload_length != IR_V2_PARITY_LENGTH ||
+            !v2_upload.fec_enabled) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        group = ir_v2_read_u16(p + 4);
+        row = p[6];
+        if (group >= (v2_upload.chunks + IR_V2_FEC_DATA_COUNT - 1) /
+                     IR_V2_FEC_DATA_COUNT || row >= IR_V2_FEC_PARITY_COUNT) {
+            upload_stats.malformed++;
+            return 0;
+        }
+        if (v2_upload.failed || v2_upload.complete)
+            return 0;
+        // One 256-byte parity group is enough for the ordered sender schedule.
+        if (!v2_upload.fec_mask || v2_upload.fec_group != group) {
+            v2_upload.fec_mask = 0;
+            v2_upload.fec_group = group;
+        }
+        if (v2_upload.fec_mask & (1u << row)) {
+            upload_stats.duplicates++;
+            return 0;
+        }
+        memcpy(v2_upload.fec_parity[row], p + 7, IR_V2_CHUNK_SIZE);
+        v2_upload.fec_mask |= 1u << row;
+        v2_try_fec_recover();
         return 0;
     }
 
@@ -289,6 +501,8 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         printf("IR v2 transfer aborted\n");
         return 1;
     }
+    if (v2_upload.fec_mask)
+        v2_try_fec_recover();
     if (v2_upload.complete)
         return 1;  // Repeated END has no flash side effects.
     if (v2_upload.failed) {
@@ -603,6 +817,7 @@ void ir_boot_loop(void) {
            "inner_crc=%lu gaps=%lu erases=%lu erase_us=%lu erase_max_us=%lu "
            "write_us=%lu write_max_us=%lu "
            "process_us=%lu process_max_us=%lu "
+           "fec_recovered=%lu fec_decode_us=%lu fec_decode_max_us=%lu "
            "queue_drops=%lu outer_malformed=%lu\n",
            (unsigned long)upload_stats.frames, (unsigned long)upload_stats.accepted,
            (unsigned long)upload_stats.duplicates, (unsigned long)upload_stats.malformed,
@@ -613,6 +828,9 @@ void ir_boot_loop(void) {
            (unsigned long)upload_stats.write_max_us,
            (unsigned long)upload_stats.process_us,
            (unsigned long)upload_stats.process_max_us,
+           (unsigned long)upload_stats.fec_recovered,
+           (unsigned long)upload_stats.fec_decode_us,
+           (unsigned long)upload_stats.fec_decode_max_us,
            (unsigned long)(pogobot_infrared_get_queue_drop_count() - queue_drop_start),
            (unsigned long)(pogobot_infrared_get_malformed_count() - malformed_start));
     for (uint8_t i = 0; i < IR_RX_COUNT; i++) {

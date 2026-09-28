@@ -22,7 +22,8 @@ import socket
 import secrets
 
 from ir_upload_v2 import (image_frames, abort_payload, CMD_START, CMD_END,
-                          CMD_ABORT, CAPABILITY_BANNER, DEFAULT_COPIES, MAX_COPIES)
+                          CMD_ABORT, CAPABILITY_BANNER, DEFAULT_COPIES,
+                          DEFAULT_FEC_COPIES, MAX_COPIES)
 
 # Console ------------------------------------------------------------------------------------------
 
@@ -330,14 +331,24 @@ class LiteXTerm:
         self.IR    = IR
         self.ir_v2_requested = ir_v2
         self.ir_v2 = ir_v2
+        self.ir_fec = False
+        # The matching remote uses the existing v2 announcement; this switch
+        # permits parity-free comparison trials without changing Makefiles.
+        fec_setting = os.environ.get("POGOBOT_IR_FEC", "1")
+        if fec_setting not in ("0", "1"):
+            raise ValueError("POGOBOT_IR_FEC must be 0 or 1")
+        self.ir_fec_enabled = fec_setting == "1"
         # The example Makefiles remain unchanged; the environment selects how
         # many complete broadcasts the remote receives for each IR upload.
+        copies_setting = os.environ.get("POGOBOT_IR_COPIES")
         try:
-            self.ir_v2_copies = int(os.environ.get("POGOBOT_IR_COPIES", DEFAULT_COPIES))
+            self.ir_v2_copies_override = (int(copies_setting)
+                                          if copies_setting is not None else None)
         except ValueError as exc:
             raise ValueError("POGOBOT_IR_COPIES must be an integer from 1 to 5") from exc
-        if not 1 <= self.ir_v2_copies <= MAX_COPIES:
+        if self.ir_v2_copies_override is not None and not 1 <= self.ir_v2_copies_override <= MAX_COPIES:
             raise ValueError("POGOBOT_IR_COPIES must be an integer from 1 to 5")
+        self.ir_v2_copies = self.ir_v2_copies_override or DEFAULT_COPIES
 
     def open(self, port, baudrate):
         if hasattr(self, "port"):
@@ -543,14 +554,16 @@ class LiteXTerm:
             image = source.read()
         transfer_id = secrets.randbits(32)
         print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, "
-              f"{len(image)} bytes, {self.ir_v2_copies} passes")
+              f"{len(image)} bytes, {self.ir_v2_copies} passes, "
+              f"16+4 parity {'on' if self.ir_fec else 'off'}")
         started = False
         try:
             for pass_number in range(1, self.ir_v2_copies + 1):
                 pass_start = time.monotonic()
                 # START, all DATA, and END are repeated with one transfer ID;
                 # receivers keep accepted chunks and skip duplicate writes.
-                for command, payload in image_frames(image, address, transfer_id):
+                for command, payload in image_frames(image, address, transfer_id,
+                                                     fec=self.ir_fec):
                     frame = SFLFrame()
                     frame.cmd, frame.payload = command, payload
                     if not self.send_frame(frame):
@@ -608,9 +621,12 @@ class LiteXTerm:
 
     def answer_magic(self):
         print("[LXTERM] Received firmware download request from the device.")
-        # A remote advertises v2 immediately before SFL magic; direct cable
-        # boots and older remotes continue to use the legacy transfer.
+        # The matching remote advertises v2 before SFL magic; direct cable
+        # boots continue to use the legacy transfer.
         self.ir_v2 = self.ir_v2_requested or (self.ir_v2_advertised and len(self.mem_regions) == 1)
+        self.ir_fec = self.ir_v2 and self.ir_v2_advertised and self.ir_fec_enabled
+        self.ir_v2_copies = (self.ir_v2_copies_override if self.ir_v2_copies_override is not None
+                             else DEFAULT_FEC_COPIES if self.ir_fec else DEFAULT_COPIES)
         self.ir_v2_advertised = False
         if self.ir_v2 and not self.ir_v2_requested:
             print("[LXTERM] Remote advertised versioned IR upload.")

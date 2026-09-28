@@ -511,6 +511,18 @@ int flash_robot(void)
                 uart_write(SFL_ACK_SUCCESS);
                 break;
 
+            case IR_V2_CMD_PARITY:
+                /* The PC computes parity; the remote only validates size and broadcasts it. */
+                if (!v2_mode || frame.payload_length != IR_V2_PARITY_LENGTH) {
+                    uart_write(SFL_ACK_ERROR);
+                    break;
+                }
+                failures = 0;
+                send_flash_message((char *)&frame, frame.payload_length + 4);
+                msleep(200);
+                uart_write(SFL_ACK_SUCCESS);
+                break;
+
             case IR_V2_CMD_END:
             case IR_V2_CMD_ABORT:
                 if (!v2_mode || frame.payload_length != IR_V2_ID_LENGTH) {

@@ -513,6 +513,17 @@ static void append_v2_start(uint32_t id, uint32_t address, uint32_t length,
     append_v2(IR_V2_CMD_START, payload, sizeof(payload));
 }
 
+static void append_v2_fec_start(uint32_t id, uint32_t address, uint32_t length,
+                                uint32_t image_crc)
+{
+    append_v2_start(id, address, length, image_crc);
+    struct sfl_frame *frame = (struct sfl_frame *)messages[message_count - 1].payload;
+    frame->payload[1] = IR_V2_FLAG_FEC16X4;
+    uint16_t crc = crc16(&frame->cmd, frame->payload_length + 1);
+    frame->crc[0] = crc >> 8;
+    frame->crc[1] = crc;
+}
+
 static void append_v2_data(uint32_t id, uint16_t index, uint32_t image_length)
 {
     uint8_t payload[IR_V2_DATA_HEADER_LENGTH + IR_V2_CHUNK_SIZE];
@@ -634,6 +645,30 @@ static void test_v2_three_pass_repair(void)
     for (unsigned int index = 0; index < 33; index++)
         CHECK(chunk_writes[(0x60000u / 64u) + index] == 1);
     assert_chunks(0, 33);
+}
+
+static void test_v2_fec_rejects_malformed_parity(void)
+{
+    const uint32_t id = 0x71234567u;
+    const uint32_t length = IR_V2_CHUNK_SIZE;
+    uint8_t payload[IR_V2_PARITY_LENGTH] = {0};
+    reset_device();
+    append_v2_fec_start(id, SPIFLASH_BASE + 0x60000u, length,
+                        generated_image_crc(length));
+    put_u32(payload, id);
+    put_u16(payload + 4, 1);  /* Group one is outside the image. */
+    append_v2(IR_V2_CMD_PARITY, payload, sizeof(payload));
+    put_u16(payload + 4, 0);
+    payload[6] = IR_V2_FEC_PARITY_COUNT;  /* Invalid parity row. */
+    append_v2(IR_V2_CMD_PARITY, payload, sizeof(payload));
+    payload[6] = 0;
+    append_v2(IR_V2_CMD_PARITY, payload, sizeof(payload) - 1);
+    append_v2_data(id, 0, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(upload_stats.malformed == 3);
+    CHECK(upload_stats.fec_recovered == 0);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
 }
 
 static void test_v2_rejected_data_and_restart(void)
@@ -786,9 +821,56 @@ static void test_python_wire_fixture(const char *path)
         CHECK(flash_bytes[0x60000u + i] == pattern(i / 64, i % 64));
 }
 
+static void test_python_fec_fixture(const char *path, int complete,
+                                    uint32_t recovered)
+{
+    FILE *source = fopen(path, "rb");
+    CHECK(source != NULL);
+    reset_device();
+    for (;;) {
+        int command = fgetc(source);
+        if (command == EOF) break;
+        int length = fgetc(source);
+        uint8_t payload[255];
+        CHECK(length >= 0 && fread(payload, 1, length, source) == (size_t)length);
+        append_v2(command, payload, length);
+    }
+    CHECK(fclose(source) == 0);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET) == complete);
+    CHECK(upload_stats.fec_recovered == recovered);
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    if (complete) {
+        for (unsigned int i = 0; i < 17u * 64u + 1u; i++)
+            CHECK(flash_bytes[0x60000u + i] == pattern(i / 64, i % 64));
+    }
+}
+
+static void test_python_fec_large_fixture(const char *path)
+{
+    FILE *source = fopen(path, "rb");
+    CHECK(source != NULL);
+    reset_device();
+    for (;;) {
+        int command = fgetc(source);
+        if (command == EOF) break;
+        int length = fgetc(source);
+        uint8_t payload[255];
+        CHECK(length >= 0 && fread(payload, 1, length, source) == (size_t)length);
+        append_v2(command, payload, length);
+    }
+    CHECK(fclose(source) == 0);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(upload_stats.fec_recovered == 64);
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    for (unsigned int i = 0; i < 64u * 1024u; i++)
+        CHECK(flash_bytes[0x60000u + i] == pattern(i / 64, i % 64));
+}
+
 int main(int argc, char **argv)
 {
-    CHECK(argc == 2);
+    CHECK(argc == 9);
     test_complete_image();
     test_ten_missing_and_duplicates();
     test_thirty_one_missing();
@@ -802,11 +884,19 @@ int main(int argc, char **argv)
     test_v2_reorder_and_short_tail();
     test_v2_missing_tail_and_many_losses();
     test_v2_three_pass_repair();
+    test_v2_fec_rejects_malformed_parity();
     test_v2_rejected_data_and_restart();
     test_v2_metadata_and_reset();
     test_v2_malformed_frames();
     test_v2_max_image();
     test_python_wire_fixture(argv[1]);
+    test_python_fec_fixture(argv[2], 1, 4);
+    test_python_fec_fixture(argv[3], 1, 3);
+    test_python_fec_fixture(argv[4], 0, 0);
+    test_python_fec_fixture(argv[5], 1, 1);
+    test_python_fec_fixture(argv[6], 0, 1);
+    test_python_fec_large_fixture(argv[7]);
+    test_python_fec_fixture(argv[8], 1, 4);
     puts("IR upload host fault injection: PASS");
     return 0;
 }

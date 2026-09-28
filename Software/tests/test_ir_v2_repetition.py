@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import litex_term
-from ir_upload_v2 import CMD_START, CMD_DATA, CMD_END, CMD_ABORT, DEFAULT_COPIES
+from ir_upload_v2 import (CMD_START, CMD_DATA, CMD_END, CMD_ABORT, CMD_PARITY,
+                          DEFAULT_COPIES)
 
 
 class RepeatedUploadTest(unittest.TestCase):
@@ -28,8 +29,10 @@ class RepeatedUploadTest(unittest.TestCase):
         # upload itself uses the recorded SFL sender below.
         with patch.object(litex_term, "Console", lambda: object()), \
              patch.dict(os.environ, {"POGOBOT_IR_COPIES": str(copies)}):
-            return litex_term.LiteXTerm(True, "firmware.bin", "0x260000",
+            term = litex_term.LiteXTerm(True, "firmware.bin", "0x260000",
                                         None, True, False, 0, False)
+        term.ir_fec = False  # Direct upload tests bypass the serial announcement.
+        return term
 
     def upload(self, term, image, sender):
         with tempfile.TemporaryDirectory() as directory:
@@ -77,6 +80,23 @@ class RepeatedUploadTest(unittest.TestCase):
         with self.assertRaises(IOError):
             self.upload(term, bytes(range(65)), record)
         self.assertEqual(sent, [CMD_START, CMD_DATA, CMD_ABORT])
+
+    def test_parity_is_sent_in_every_pass(self):
+        term = self.make_term(2)
+        term.ir_fec = True
+        sent = []
+
+        def record(frame):
+            sent.append((frame.cmd, frame.payload))
+            return True
+
+        self.upload(term, bytes(range(256)) * 4 + b"x", record)
+        commands = [command for command, _ in sent]
+        self.assertEqual(commands.count(CMD_PARITY), 16)
+        self.assertEqual(commands.count(CMD_START), 2)
+        self.assertEqual(commands.count(CMD_END), 4)
+        self.assertTrue(all(payload[1] == 1 for command, payload in sent
+                            if command == CMD_START))
 
     def test_copy_count_is_bounded(self):
         for invalid in ("0", "6", "two"):

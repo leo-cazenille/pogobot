@@ -2,8 +2,8 @@
 
 Date: 2026-09-28
 
-Status: Phases 1–2 software and host verification complete; Phase 3 software
-implemented with host verification, hardware timing and Phases 4–5 pending.
+Status: Phases 1–4 software and host verification complete; hardware validation,
+pacing measurements, and Phase 5 pending.
 
 ## Phase commit record
 
@@ -178,13 +178,13 @@ needed for per-robot completion status.
       completion. Broadcast mode without feedback can report transmission progress
       and expose completion through robot indicators.
 
-The unchanged example `make connect TTY=...` command defaults to three full
-passes for the observed high-loss case. `POGOBOT_IR_COPIES=1` or `2` selects
-shorter comparisons; accepted values are 1–5. Every pass repeats START, all
-DATA frames, and two END frames using the same transfer ID. The remote already
-broadcasts each START three times. Robot bitmaps suppress duplicate flash
-writes and retain progress if a pass ends incomplete. These counts and the
-existing pacing are provisional until robot measurements.
+In uncoded mode, the unchanged example `make connect TTY=...` command defaults
+to three full passes for the observed high-loss case. `POGOBOT_IR_COPIES=1` or
+`2` selects shorter comparisons; accepted values are 1–5. Every pass repeats
+START, all DATA frames, and two END frames using the same transfer ID. The
+remote already broadcasts each START three times. Robot bitmaps suppress
+duplicate flash writes and retain progress if a pass ends incomplete. These
+counts and the existing pacing are provisional until robot measurements.
 
 Two copies add 100% packet traffic; three add 200%. With independent loss
 probability `p`, two copies leave residual loss probability `p^2` per chunk.
@@ -210,26 +210,64 @@ their data from valid parity packets.
 | 16 data + 4 Reed–Solomon parity | 25% | Any four missing packets out of twenty |
 | 16 data + 8 Reed–Solomon parity | 50% | Any eight missing packets out of twenty-four |
 
-Start evaluation with systematic Reed–Solomon using 16 data chunks and four
-parity chunks, retaining 64-byte payloads. Keep parity counts configurable.
-XOR parity is a simpler alternative with less recovery capacity.
+The selected fixed format is systematic 16 data + 4 Reed–Solomon parity with
+64-byte symbols. Other parity counts require a new protocol definition.
 
-- [ ] Specify coding-group IDs, symbol indices, finite-field parameters, and
+- [x] Specify coding-group IDs, symbol indices, finite-field parameters, and
       final-group padding. Whole-image verification excludes padding bytes.
-- [ ] Use bounded static buffers and integer arithmetic over GF(256). Choose an
-      implementation compatible with firmware size and portability constraints.
-- [ ] Budget decoder working memory and firmware size explicitly. Twenty 64-byte
-      payloads require 1,280 bytes before matrices, metadata, and other scratch space.
-- [ ] Evaluate interleaving a small number of coding groups to spread burst losses.
-      Four fully buffered groups require 5,120 payload bytes before decoder state.
-- [ ] Schedule decoding and flash writes so reception continues to make progress.
-- [ ] Keep groups that exceed their recovery capacity incomplete and recover them
-      in subsequent rounds. FEC must not bypass final image verification.
+- [x] Use bounded static buffers and integer arithmetic over GF(256).
+- [x] Budget decoder working memory and firmware size explicitly.
+- [x] Interleave four coding groups in the PC sender to spread adjacent losses.
+      The robot holds parity for only one group at a time and reads accepted
+      data from flash when solving, so interleaving adds no robot group buffers.
+- [x] Decode as sufficient parity arrives, then read back each reconstructed
+      flash write. The remote retains the provisional 200 ms frame gap.
+- [x] Keep groups that exceed their recovery capacity incomplete and recover
+      them in subsequent rounds. FEC cannot bypass final image verification.
+- [ ] Measure decoder latency, queue/ring drops, and completion rate on robots
+      before changing pacing or treating the host results as hardware validation.
 
-Acceptance: each supported erasure pattern within the code's capacity reconstructs
-the original data; losses beyond capacity cannot produce a valid incomplete image.
-Measure decoding time, RAM, stack use, firmware size, and reception losses during
-decoding before choosing production parameters.
+### Implemented 16+4 wire format
+
+START retains its 20-byte layout and sets flags byte bit 0 for FEC. The new
+SFL command `0x14` PARITY carries a 4-byte transfer ID, 2-byte group index,
+1-byte parity row (0–3), and 64 parity bytes; all multibyte fields are
+big-endian. Group `g` covers DATA indices `16g` through `16g+15`. The final
+group pads absent symbols and a short final DATA symbol with zero bytes for
+parity generation; only actual image bytes are programmed or included in the
+final CRC-32. Inner SFL CRC-16 and outer IR SLIP CRC-32 still reject corrupt
+packets before decoding.
+
+Arithmetic is over GF(256) with polynomial `0x11d`. Parity row `r` contains
+the sum of data symbol `i` multiplied by `inverse(i XOR (16+r))` at every byte
+position. The Cauchy matrix makes any available set of `k` parity rows solve
+any `k <= 4` missing data symbols. The PC sends DATA for four groups in
+interleaved order, followed by each group's four parity frames. The remote
+forwards parity without computing it.
+
+The robot's `v2_upload` state occupies 540 bytes of BSS, including its existing
+256-byte receive bitmap and one 256-byte parity group. The decoder uses a
+384-byte RISC-V stack frame and a 64-byte coefficient table in read-only data;
+its compiled function is 1,740 bytes. Current v3 Pogobios ELF sizes are
+71,180 bytes text / 14,216 bytes BSS on a robot and 61,268 bytes text /
+10,656 bytes BSS on a remote. Measure actual decoder and flash timing on
+hardware; host mocks report zero microseconds.
+
+The matching updated remote is assumed, so the existing versioned upload
+announcement selects FEC automatically without a second capability banner.
+With FEC enabled, the unchanged `make connect TTY=...` command defaults to one
+pass; `POGOBOT_IR_COPIES=2` or more adds full repair passes, and
+`POGOBOT_IR_FEC=0` disables parity for comparison. For a 60 KiB image, 960
+DATA and 240 PARITY frames add 25% packet traffic and at least 240 seconds of
+the current 200 ms remote pauses, before serial and erase overhead.
+
+Host verification checks every Cauchy submatrix through four erasures, Python
+sender framing, representative mixed data/parity losses, short-tail padding,
+malformed parity, an over-capacity group, whole-image CRC rejection of bad
+recovery, repair in a later pass, and a 64 KiB cross-language fixture exercising
+all 64 coefficient positions. On hardware, compare completion and duration at
+one, two, and three passes; inspect FEC recovery, decoder timing, and receive
+drop counters before production use.
 
 ## Phase 5: optional selective retransmission through the return link
 

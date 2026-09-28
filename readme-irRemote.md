@@ -50,7 +50,7 @@ The command "rc_flash_robot" send to the robots a special command to switch to l
 When the programmation is done, the robots blink green slowly. <br>
 If the robots blink orange, the programmation is partiel. Change the distance or angle of the remote and start again the "rc_flash_robot" command.
 
-### Reliable IR firmware upload (Phases 2–3)
+### Reliable IR firmware upload (Phases 2–4)
 
 Install matching current Pogobios builds on the remote and robots, and update
 the SDK tools used by the example Makefile so they include the current
@@ -63,31 +63,35 @@ After starting the remote with `run`, enter `rc_flash_robot` at its prompt.
 The updated remote announces versioned IR support before requesting the image,
 and the updated terminal selects that mode automatically for the single firmware
 image in the example Makefile. `--ir-v2` remains an optional manual override;
-it is not needed for this command. Direct cable uploads and older remotes keep
-the legacy upload behavior. A two-entry `images.json` also stays on the legacy
+it is not needed for this command. Direct cable uploads keep the legacy upload
+behavior. A two-entry `images.json` also stays on the legacy
 path; upload each image separately for versioned IR transfers.
 
 The current version accepts one image per transfer in the gateware slot
 (`0x240000`) or firmware slot (`0x260000`), up to 128 KiB. The PC sends a versioned
-START, numbered 64-byte DATA chunks, and two END messages per pass. The normal
-command sends three complete passes with the same transfer ID. To compare one
-or two passes without editing a Makefile, use for example:
+START, numbered 64-byte DATA chunks, four Reed–Solomon parity frames per group
+of 16 data chunks, and two END messages per pass. Four groups are interleaved
+to spread short bursts of lost frames. Up to four missing frames among a
+group's 20 data and parity frames can be recovered. The normal command uses
+one coded pass. For additional full passes, use for example:
 
     POGOBOT_IR_COPIES=2 make connect TTY=/dev/ttyUSBX
 
-Valid copy counts are 1–5. Full passes separate repeat copies in time. The
-robot erases the destination at the first START, ignores duplicate chunks,
-reads each write back, and checks a CRC-32 over the exact image before writing
-`FlashIsOK`. A robot that still misses chunks keeps the image invalid. A new
-transfer ID restarts and erases the image; repeated START with the same ID and
-metadata preserves progress in RAM until reboot.
+Valid copy counts are 1–5. `POGOBOT_IR_FEC=0 make connect TTY=/dev/ttyUSBX`
+disables parity for comparison and defaults to three uncoded passes. Full
+passes use the same transfer ID and retain accepted chunks. The robot erases
+the destination at the first START, skips duplicate chunks, reads every write
+back, and checks a CRC-32 over the exact image before writing `FlashIsOK`.
+A robot that still misses chunks keeps the image invalid. A new transfer ID
+restarts and erases the image; repeated START with the same ID and metadata
+preserves progress in RAM until reboot.
 
-The remote still pauses 200 ms after each data frame and three seconds after
-START for flash erase. At 60 KiB, 960 data frames make the 200 ms pauses alone
-about 3.2 minutes per pass, or 9.6 minutes for three passes. The terminal prints
-the time and remote acknowledgement for each pass. Robot logs report receiver
-processing time, flash erase/write time, and drop counters; use hardware trials
-to determine whether the pacing can safely change.
+The remote still pauses 200 ms after each data or parity frame and three
+seconds after START for flash erase. At 60 KiB, 960 data plus 240 parity frames
+make those pauses about four minutes for one coded pass, before other overhead.
+The terminal prints time and remote acknowledgement per pass. Robot logs
+report recovered chunks, decoder time, flash erase/write time, and drop
+counters; use hardware trials to determine whether pacing can safely change.
 
 Serial acknowledgements confirm processing by the remote, not successful
 reception or completion by each robot. Check each robot's status before running

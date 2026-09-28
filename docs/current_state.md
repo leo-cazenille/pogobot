@@ -70,7 +70,7 @@ wire fixture. Automatic mode selection has host serial-stream tests. Robot and
 remote Pogobios v3 builds succeed.
 Robot delivery, timing, and per-robot completion remain unverified on hardware.
 
-Phase 3 sends three full image passes by default with unchanged example
+Phase 3 supports three uncoded image passes by default with unchanged example
 Makefiles. `POGOBOT_IR_COPIES=1` through `5` selects the count. Repeated START
 and END messages use one transfer ID, and accepted chunks are not rewritten.
 The terminal reports remote-acknowledged pass time; the robot now reports frame
@@ -78,17 +78,30 @@ processing time alongside flash erase/write timing. Host tests cover the
 three-pass serial schedule and repair of disjoint losses without re-erase.
 The 200 ms data gap and three-second erase pause remain provisional.
 
+Phase 4 adds systematic Reed–Solomon 16+4 parity over 64-byte chunks. The PC
+interleaves four groups; the robot holds only one 256-byte parity group and
+uses accepted flash data for decoding. One coded pass is now the default for
+`make connect TTY=...`; `POGOBOT_IR_FEC=0` selects uncoded comparison. Host
+tests cover all coding coefficients, four erasures, missing parity, an
+over-capacity group, short final chunks, later-pass repair, CRC mismatch, and
+a 64 KiB image. Robot and remote v3 cross-builds succeed. Hardware decoder
+timing, receive drops during decoding, and completion rate remain unknown.
+
 Other local changes include `Software/pogosoc.py` and an untracked hardware
 history directory. Their contents are outside this verification work.
 
 ## Current decisions
 
-- Measure Phase 3 timing and completion on hardware before changing pacing or
-  selecting FEC and return-link feedback parameters.
+- Measure coded and uncoded timing and completion on hardware before changing
+  pacing or selecting return-link feedback parameters.
+- Use fixed 16+4 Cauchy Reed–Solomon coding with four-group sender
+  interleaving. One coded pass is the initial default; hardware results may
+  justify more passes or different pacing.
 - Keep firmware changes small and preserve the existing application API where
   possible. New diagnostics must have bounded RAM and execution costs.
 - Treat the reported upload as an engineering failure case, not a measured
-  channel loss rate. No scientific parameter or parity rate has been selected.
+  channel loss rate. The selected 16+4 parity rate is provisional, not a
+  measured optimum.
 
 ## Data limitations
 
@@ -105,5 +118,6 @@ performed.
    the SDK terminal and helper before testing `make connect TTY=...`.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
-3. Compare one, two, and three passes under matched conditions. Use measured
-   completion, processing times, and loss counters to tune pacing and later FEC.
+3. Compare one coded pass, repeated coded passes, and uncoded passes under
+   matched conditions. Use completion, decoder timing, and loss counters to
+   tune pacing and decide whether return-link feedback is useful.
