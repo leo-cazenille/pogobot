@@ -106,6 +106,43 @@ class RepeatedUploadTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "POGOBOT_IR_COPIES"):
                 self.make_term(invalid)
 
+    def test_q_cancels_between_frames_with_abort(self):
+        term = self.make_term(1)
+        sent = []
+
+        def request_cancel_after_start(frame):
+            sent.append(frame.cmd)
+            if frame.cmd == CMD_START:
+                term.ir_v2_cancel_requested = True
+            return True
+
+        result, output = self.upload(term, b"x" * 65, request_cancel_after_start)
+        self.assertIs(result, False)
+        self.assertEqual(sent, [CMD_START, CMD_ABORT])
+        self.assertIn("Press Q to cancel", output)
+        self.assertIn("upload cancelled", output)
+        self.assertFalse(term.ir_v2_uploading)
+
+        class QConsole:
+            def getkey(self):
+                term.writer_alive = False
+                return b"Q"
+
+        class RecordingPort:
+            writes = []
+
+            def write(self, data):
+                self.writes.append(data)
+
+        term.console = QConsole()
+        term.port = RecordingPort()
+        term.writer_alive = True
+        term.ir_v2_uploading = True
+        term.ir_v2_cancel_requested = False
+        term.writer()
+        self.assertTrue(term.ir_v2_cancel_requested)
+        self.assertEqual(term.port.writes, [])
+
 
 if __name__ == "__main__":
     unittest.main()

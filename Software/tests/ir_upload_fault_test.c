@@ -88,6 +88,7 @@ void irq_setmask(unsigned int value);
 #define MAX_MESSAGES 1200
 static message_t messages[MAX_MESSAGES];
 static unsigned int message_count, message_read;
+static uint32_t message_release_us;
 static unsigned int sector_erases[SPIFLASH_SIZE / SPIFLASH_SECTOR_SIZE];
 static unsigned int chunk_writes[SPIFLASH_SIZE / 64];
 static uint32_t failed_program_address = UINT32_MAX;
@@ -155,7 +156,8 @@ void rgb_blink_set_color(int r, int g, int b) { (void)r; (void)g; (void)b; }
 void rgb_blink(void) {}
 void update_led_status(void) {}
 void pogobot_infrared_update(void) {}
-int pogobot_infrared_message_available(void) { return message_read < message_count; }
+int pogobot_infrared_message_available(void)
+{ return clock_us >= message_release_us && message_read < message_count; }
 void pogobot_infrared_recover_next_message(message_t *message)
 { *message = messages[message_read++]; }
 uint32_t pogobot_infrared_get_queue_drop_count(void) { return 0; }
@@ -213,6 +215,7 @@ static void reset_device(void)
     memset(sector_erases, 0, sizeof(sector_erases));
     memset(chunk_writes, 0, sizeof(chunk_writes));
     reset_messages();
+    message_release_us = 0;
     clock_us = 0;
     failed_program_address = UINT32_MAX;
     partial_known = 0;  /* A fresh test starts with a fresh robot boot. */
@@ -580,6 +583,25 @@ static void test_v2_start_enters_from_pogobios(void)
     CHECK(!ir_boot_try_v2_start(&messages[0]));
 }
 
+static void test_v2_start_after_remote_handshake(void)
+{
+    const uint32_t id = 0x1234beefu;
+    const uint32_t length = 65u;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length,
+                    generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    // The PC cannot transmit START until the remote's command burst and
+    // serial handshake finish; 4 seconds is beyond the old 2-second wait.
+    message_release_us = 4000000u;
+    ir_boot_loop();
+    CHECK(clock_us >= message_release_us);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(upload_stats.frames == 4);
+}
+
 static void test_v2_reorder_and_short_tail(void)
 {
     const uint32_t id = 0x12345678u;
@@ -912,6 +934,7 @@ int main(int argc, char **argv)
     test_slip_overflow_resync();
     demonstrate_legacy_protocol_limits();
     test_v2_start_enters_from_pogobios();
+    test_v2_start_after_remote_handshake();
     test_v2_reorder_and_short_tail();
     test_v2_missing_tail_and_many_losses();
     test_v2_three_pass_repair();

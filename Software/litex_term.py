@@ -26,6 +26,10 @@ from ir_upload_v2 import (image_frames, abort_payload, CMD_START, CMD_END,
                           DEFAULT_FEC_COPIES, MAX_COPIES, CHUNK_SIZE,
                           FEC_DATA_COUNT, FEC_PARITY_COUNT)
 
+
+class IRUploadCancelled(Exception):
+    """The console requested cancellation between versioned frames."""
+
 # Console ------------------------------------------------------------------------------------------
 
 if sys.platform == "win32":
@@ -332,6 +336,8 @@ class LiteXTerm:
         self.IR    = IR
         self.ir_v2_requested = ir_v2
         self.ir_v2 = ir_v2
+        self.ir_v2_uploading = False
+        self.ir_v2_cancel_requested = False
         self.ir_fec = False
         # The matching remote uses the existing v2 announcement; this switch
         # permits parity-free comparison trials without changing Makefiles.
@@ -563,8 +569,11 @@ class LiteXTerm:
         print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, "
               f"{len(image)} bytes, {self.ir_v2_copies} passes, "
               f"16+4 parity {'on' if self.ir_fec else 'off'}")
+        print("[LXTERM] Press Q to cancel this IR upload.")
         started = False
         last_percent = -1
+        self.ir_v2_cancel_requested = False
+        self.ir_v2_uploading = True
         try:
             for pass_number in range(1, self.ir_v2_copies + 1):
                 pass_start = time.monotonic()
@@ -586,6 +595,8 @@ class LiteXTerm:
                 # receivers keep accepted chunks and skip duplicate writes.
                 for command, payload in image_frames(image, address, transfer_id,
                                                      fec=self.ir_fec):
+                    if self.ir_v2_cancel_requested:
+                        raise IRUploadCancelled()
                     frame = SFLFrame()
                     frame.cmd, frame.payload = command, payload
                     if not self.send_frame(frame):
@@ -598,6 +609,8 @@ class LiteXTerm:
                         completion_frame = frame
                 # A second END gives a receiver another chance to finalize if
                 # the first completion message was lost over infrared.
+                if self.ir_v2_cancel_requested:
+                    raise IRUploadCancelled()
                 if not self.send_frame(completion_frame):
                     raise IOError("remote rejected repeated IR v2 END frame")
                 acknowledged += 1
@@ -606,6 +619,15 @@ class LiteXTerm:
                 elapsed = time.monotonic() - pass_start
                 print(f"[LXTERM] Remote acknowledged pass {pass_number}/{self.ir_v2_copies} "
                       f"in {elapsed:.1f}s; robot completion unconfirmed.")
+        except IRUploadCancelled:
+            if 0 <= last_percent < 100:
+                print()
+            if started:
+                abort = SFLFrame()
+                abort.cmd, abort.payload = CMD_ABORT, abort_payload(transfer_id)
+                self.send_frame(abort)
+            print("[LXTERM] IR v2 upload cancelled.")
+            return False
         except Exception:
             if 0 <= last_percent < 100:
                 print()
@@ -614,6 +636,8 @@ class LiteXTerm:
                 abort.cmd, abort.payload = CMD_ABORT, abort_payload(transfer_id)
                 self.send_frame(abort)
             raise
+        finally:
+            self.ir_v2_uploading = False
         print("[LXTERM] All passes acknowledged by remote; check each robot's status.")
         return len(image)
 
@@ -663,7 +687,9 @@ class LiteXTerm:
             self.port.write(sfl_magic_ack)
         for filename, base in self.mem_regions.items():
             if self.ir_v2:
-                self.upload_v2(filename, int(base, 16))
+                if self.upload_v2(filename, int(base, 16)) is False:
+                    # ABORT already closed the remote command; do not send JUMP.
+                    return
             else:
                 self.upload(filename, int(base, 16))
         self.boot()
@@ -701,7 +727,11 @@ class LiteXTerm:
         try:
             while self.writer_alive:
                 b = self.console.getkey()
-                if b == b"\x03":
+                if self.ir_v2_uploading and b in (b"q", b"Q"):
+                    # Q belongs to the local uploader while a transfer is
+                    # active; forwarding it would corrupt the remote SFL stream.
+                    self.ir_v2_cancel_requested = True
+                elif b == b"\x03":
                     self.stop()
                 elif b == b"\n":
                     self.port.write(b"\x0a")

@@ -41,7 +41,7 @@ class OutputSink:
 
 class VersionedSelectionTest(unittest.TestCase):
     def run_stream(self, incoming, region_count=1, explicit=False,
-                   fec_enabled=True, copies_override=None):
+                   fec_enabled=True, copies_override=None, cancel_v2=False):
         # Use the actual reader and SFL handshake, with only serial I/O and
         # flash upload actions replaced by recording stubs.
         term = LiteXTerm.__new__(LiteXTerm)
@@ -62,9 +62,12 @@ class VersionedSelectionTest(unittest.TestCase):
         term.port = InputPort(term, incoming)
         choices = []
         term.upload = lambda filename, address: choices.append("legacy")
-        term.upload_v2 = lambda filename, address: choices.append(
-            "v2+fec" if term.ir_fec else "v2")
-        term.boot = lambda: None
+        def record_v2(filename, address):
+            choices.append("v2+fec" if term.ir_fec else "v2")
+            return False if cancel_v2 else None
+
+        term.upload_v2 = record_v2
+        term.boot = lambda: choices.append("boot") if cancel_v2 else None
         with patch.object(sys, "stdout", OutputSink()):
             term.reader()
         return choices, term.port.writes, term.ir_v2_copies
@@ -103,6 +106,12 @@ class VersionedSelectionTest(unittest.TestCase):
                                              copies_override=2)
         self.assertEqual(choices, ["v2+fec"])
         self.assertEqual(copies, 2)
+
+    def test_cancel_does_not_send_jump_after_abort(self):
+        choices, writes, _ = self.run_stream(CAPABILITY_BANNER + sfl_magic_req,
+                                             cancel_v2=True)
+        self.assertEqual(choices, ["v2+fec"])
+        self.assertEqual(writes, [sfl_magic_ack])
 
 
 if __name__ == "__main__":

@@ -707,7 +707,9 @@ static uint8_t exec_frame_cmd(struct sfl_frame *frame)
 
 static void ir_boot_loop_with_initial(const message_t *initial) {
     time_reference_t mytimer;
-    uint32_t timeout = 2000000;  // The versioned mode allows longer erase preparation.
+    // The remote spends about two seconds repeating ir_flash before the PC
+    // handshake, so even the first START needs the full preparation timeout.
+    uint32_t timeout = 8000000;
     struct sfl_frame * frame;
     message_t msg;
     slip_error_counter_s slip_start[IR_RX_COUNT];
