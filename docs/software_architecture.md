@@ -148,8 +148,8 @@ The documented physical flash offsets are:
 | `0x020000` | `0x020000` bytes | Bootloader Pogobios |
 | `0x040000` | `0x020000` bytes | User/current gateware |
 | `0x060000` | `0x020000` bytes | User/current Pogobios or application |
-| `0x088000` | marker sector | `FlashIsOK` / `FlashIsPar` state |
-| `0x090000` (apparent intended offset) | `0x010000` bytes | SDK 2.7 user-writable pages; see review item below |
+| `0x080000` | through `0x08ffff` | Reserved 64 KiB erase block; `FlashIsOK` / `FlashIsPar` marker at `0x088000` |
+| `0x090000` | through `0x1fffff` | V3 user-writable pages (1472 KiB, 5888 pages) |
 
 The linker places executable/read-only application content in flash-backed
 `rom`, copies initialized data to SRAM, puts BSS in SRAM, and starts the stack
@@ -233,14 +233,12 @@ These are observations, not fixes. Hardware-affecting items should be resolved
 against the schematics, known-good binaries, and an expendable/test robot
 before changing or flashing anything.
 
-1. **Physical versus mapped flash addresses are inconsistent.** The documented
-   v3 flash is 2 MiB with CPU mapping base `0x200000`, and `pogosoc.py` writes
-   serial-upload manifests at physical offsets plus that mapping base. Direct
-   `iceprog` scripts instead pass `0x240000` and `0x260000`, while the SDK 2.7
-   page API passes `0x290000` directly to 24-bit SPI commands. Those values look
-   like CPU-mapped addresses, whereas the rest of the low-level SPI routines
-   use physical offsets such as `0x88000`. Verify whether the intended physical
-   values are `0x40000`, `0x60000`, and `0x90000` before using these paths.
+1. **Check remaining flash address paths on hardware.** The SDK page API now
+   sends physical offsets starting at `0x90000` to raw SPI commands. The
+   documented v3 flash is 2 MiB with CPU mapping base `0x200000`, and
+   `pogosoc.py` writes serial-upload manifests at physical offsets plus that
+   mapping base. Direct `iceprog` scripts still pass `0x240000` and `0x260000`;
+   verify whether these paths expect mapped or physical addresses before use.
 
 2. **The magnetometer read contract is reversed in documentation.** Both
    `pogobot.h` and the implementation comment say `magn_read_XYZ()` returns 1

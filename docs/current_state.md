@@ -1,6 +1,6 @@
 # Current repository state
 
-Updated: 2026-09-28. Branch: `optimized_remote_transfer`; this is a working-tree
+Updated: 2026-09-29. Branch: `optimized_remote_transfer`; this is a working-tree
 snapshot, including local changes.
 
 ## Inspected
@@ -15,6 +15,8 @@ snapshot, including local changes.
   sources in `Software/tests/ir_upload_fault_test.c`.
 - The example build rules, v3 linker flash bounds, and startup copy path for
   a firmware self-integrity test.
+- The user flash page API, raw SPI addressing, v2/v3 flash capacities, and
+  boot-image and validity-marker allocations.
 
 ## Understood
 
@@ -97,8 +99,15 @@ recompilation. Cross-build, ELF/raw boundary check, and host CRC corruption
 check pass. A damaged image may fail before the checker can run, and hardware
 execution has not yet been tested.
 
-Other local changes include `Software/pogosoc.py` and an untracked hardware
-history directory. Their contents are outside this verification work.
+The v3 user flash page API accepts 16-bit page IDs and allocates physical
+offsets `0x90000–0x1fffff`: 5888 pages, the contiguous 1472 KiB after the
+reserved sectors on a 2 MiB v3 chip. Erasure covers 23 64 KiB sectors;
+out-of-range page IDs are rejected. The raw SPI address is corrected from the
+CPU-mapped `0x290000` to physical `0x90000`. The v3 normal Pogobios, SDK, and
+updated flash example cross-builds pass, but page read/write and erase
+boundaries still need robot validation.
+
+An untracked hardware history directory remains outside this verification work.
 
 ## Current decisions
 
@@ -113,6 +122,8 @@ history directory. Their contents are outside this verification work.
 - Treat the reported upload as an engineering failure case, not a measured
   channel loss rate. The selected 16+4 parity rate is provisional, not a
   measured optimum.
+- Target v3 heads with 2 MiB flash only; the user page API may use all
+  physical flash from `0x90000` through `0x1fffff`.
 
 ## Data limitations
 
@@ -120,7 +131,8 @@ The current evidence is one failure log, source inspection, a simulated host
 device, and a cross-build. A gap does not locate the loss within the optical,
 interrupt, buffering, or flash path. The host harness uses mocked transport,
 flash, and timing; no instrumented hardware upload or image readback has been
-performed.
+performed. The expanded user flash region has not been erased or read back on
+hardware.
 
 ## Next concrete tasks
 
@@ -134,3 +146,6 @@ performed.
    tune pacing and redundancy.
 4. Upload `Software/example/firmware_integrity` as a 50–60 KiB image and record
    its on-robot PASS/FAIL result alongside the receiver diagnostics.
+5. Run `Software/example/test_read_write_flash` on a test v3 robot to check
+   pages 0, 255, 256, 1791, 1792, and 5887 and confirm neighboring reserved
+   flash remains intact after the 23-sector erase.

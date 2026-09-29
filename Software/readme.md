@@ -361,6 +361,8 @@ This table shows addresses in flash memory. The flash memory itself is mapped in
 | 0x20000          | Size of pogobios (usually <64KB) | 0x20000   | Pogobios         |
 | 0x40000          | 0x1969a                          | 0x20000   | User gateware    |
 | 0x60000          | Size of user code                | 0x20000   | User software    |
+| 0x80000          | Reserved; validity marker at 0x88000 | 0x10000 | Upload state, excluded from user erases |
+| 0x90000          | 5888 pages of 256 bytes          | 0x170000  | User-writable data on v3, through 0x1FFFFF |
 
 
 ### <a name='install-on-linux-distributions-other-than-ubuntu-by-using-singularity-containers'></a>Install on Linux distributions other than Ubuntu by using Singularity Containers
