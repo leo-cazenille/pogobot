@@ -11,9 +11,10 @@ snapshot, including local changes.
   `pogobios/ir_boot.c`, `pogolib/pogolib_infrared.c`, `pogolib/ir_uart.c`, and
   `pogolib/slip.c`, along with relevant headers and generated flash addresses.
 - The user-provided log of a failed Pogowall or Pogoshower firmware upload.
-- A hardware Pogoshower attempt where the new remote advertised v2 but the PC
-  initially used an old SDK terminal, followed by a v2 attempt whose START,
-  DATA, and parity frames reached Pogobios without its `ir_flash` command.
+- Hardware Pogoshower attempts where the new remote advertised v2, including
+  one with an old PC terminal and one where the robot entered `ir_flash` but
+  timed out before START arrived. The latter then printed START, DATA, and
+  parity frames as ordinary Pogobios messages.
 - Host fault injection of the production IR upload, UART ring, and SLIP decoder
   sources in `Software/tests/ir_upload_fault_test.c`.
 - The example build rules, v3 linker flash bounds, and startup copy path for
@@ -41,8 +42,9 @@ proposed repair sequence and its trade-offs.
 - Which combination of optical errors, software queue drops, ring overruns, and
   flash-operation delays caused the reported losses. No corresponding counters
   or timing measurements have been supplied.
-- Which exact robot and remote binaries were deployed for that upload, and
-  whether they match this checkout.
+- Which exact binaries were deployed for the original 31-gap upload. The latest
+  attempt used a robot installed from this checkout's previous v2.7.1 package;
+  the remote image still needs independent confirmation.
 - Completion rate and upload duration across distances, orientations, lighting,
   and robot counts.
 - Whether Phase 1 behavior is correct on hardware under real optical loss.
@@ -114,17 +116,22 @@ API v2.7.1 source commit `7f05f1e` rebuilt v3 bootloader, robot, remocon, and
 SDK artifacts. The new installer includes five binaries, corrected physical
 `iceprog` offsets, scripts with the original `check_return` status reporting,
 and checksums. A separate SDK archive was generated. Host checks cover script
-success and failure paths; programming these packaged images on hardware remains
-to be tested.
+success and failure paths. A robot was programmed and verified with the previous
+package image; the latest image and remote still need testing.
 
 The first hardware attempt reported 148 legacy gaps because the PC used an old
-terminal despite the remote's v2 banner. After updating the SDK, a 25,824-byte
-v2 coded attempt sent START/DATA/parity, but the robot's Pogobios printed them
-as ordinary messages and never entered `ir_flash`; its fast blue upload blink
-therefore never started. Follow-up source commit `c525851` lets a CRC-checked
-START enter the upload loop directly and restores a remote-acknowledged host
-progress bar. The robot build and host tests pass. The standalone SDK fix is
-`7ae21f8`; robot validation of the new entry path remains pending.
+terminal despite the remote's v2 banner. In a later 25,824-byte coded attempt,
+the robot printed START/DATA/parity as ordinary messages. Source commit
+`c525851` added a CRC-checked START entry path and host progress display;
+SDK commit `7ae21f8` carries the progress display. With that robot image
+programmed and verified by `iceprog`, another attempt logged `frames=0` in
+`ir_flash`, then printed START/DATA/parity as ordinary messages. The remote
+repeats the entry command for about two seconds before PC handshake, while
+the robot's initial wait was two seconds. Source commit `869c86c` extends
+that wait to eight seconds and adds Q cancellation. SDK commit `80f69eb`
+adds cancellation; the test computer remains at older SDK commit `647cc55`,
+which explains its missing progress bar. Host tests and robot cross-build pass;
+the updated robot image has not yet been tried on hardware.
 
 ## Current decisions
 
@@ -146,18 +153,20 @@ progress bar. The robot build and host tests pass. The standalone SDK fix is
 
 ## Data limitations
 
-The current evidence is two hardware attempt logs, source inspection, a
+The current evidence is three hardware attempt logs, source inspection, a
 simulated host device, and cross-builds. A gap does not locate the loss within the optical,
 interrupt, buffering, or flash path. The host harness uses mocked transport,
 flash, and timing; no instrumented upload dataset or full flash dump has been
-archived. The new installer scripts have only been tested with a fake
-`iceprog`, not an attached robot or remote.
+archived. The robot installer has programmed a head with `iceprog` verification;
+the latest image and remote installer still need a hardware trial.
 
 ## Next concrete tasks
 
-1. Program the follow-up robot Pogobios image and use SDK commit `7ae21f8`;
-   verify that a missed `ir_flash` command is recovered by v2 START, the fast
-   blue blink appears, and the host progress reaches 100% per pass.
+1. Update the test computer's `~/leo/pogosim/pogobot-sdk` to at least
+   `80f69eb`, program the latest robot Pogobios image, and retry. Confirm
+   `IR v2 START`, the fast blue blink, host progress, and final image CRC.
+   If frames still print as ordinary messages, capture a START frame's raw
+   bytes to diagnose why the direct START entry path did not engage.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under

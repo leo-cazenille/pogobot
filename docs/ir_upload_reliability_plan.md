@@ -14,7 +14,7 @@ that the feature has been tested on hardware.
 | Phase | Final software commit | Host verification | Robot validation |
 | --- | --- | --- | --- |
 | 1 | `6afb76846663270bf2411c1b27728e18ab1f6b65` | Passed fault injection and v3 cross-build | Pending |
-| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: a robot received v2 frames but missed the entry command; completion untested |
+| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: a robot entered upload mode but timed out before START; completion untested |
 | 3 | `95c0d8a09ccb4a9d57df140567b1af4c8d5d78d4` | Passed repeated-pass sender tests, receiver fault injection, and robot/remote v3 cross-builds | Pending; pacing measurements needed |
 | 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Partial: coded frames observed on robot, but decoder/completion untested |
 
@@ -22,7 +22,18 @@ Hardware follow-up: commit `c52585136636e5bd81ce3be9197524a9c47682ba`
 lets Pogobios enter upload mode from a CRC-checked v2 START if the separate
 `ir_flash` command is missed. The matching SDK progress display is commit
 `7ae21f8` in `pogobot-sdk`. Host fault injection and the v3 robot cross-build
-pass; this recovery path still needs robot validation.
+pass. A subsequent hardware attempt with that robot image entered `ir_flash`
+but logged zero frames: its two-second initial wait ended while the remote was
+still repeating the entry command and negotiating with the PC. Valid-looking
+START and data frames were then printed by normal Pogobios; the direct START
+entry path was not observed to work in that attempt.
+
+Timing follow-up: source commit `869c86c089f934c4fa578a1a40c845f18c51bc10`
+extends the first-frame wait to eight seconds and adds Q cancellation between
+v2 frames. SDK commit `80f69eb0419e33f3eef515ae547d0d7aac3843a1`
+includes Q cancellation, while `7ae21f8` already includes the progress bar.
+Host fault injection, serial tests, and robot cross-build pass; robot validation
+of the new timing remains pending.
 
 ## Objective
 
