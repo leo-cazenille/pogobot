@@ -14,7 +14,7 @@ make
 make connect TTY=/dev/ttyUSB0
 ```
 
-The default 32 KiB payload produces a 56.2 KiB image with the current v3 SDK.
+The default 32 KiB payload produces a 56.4 KiB image with the current v3 SDK.
 Set `PAYLOAD_BYTES` to adjust the upload size; `make` reseals the image
 without recompiling the program. It prints the exact final byte count, so
 adjust the payload to keep the image in the 50–60 KiB range for your SDK

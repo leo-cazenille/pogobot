@@ -94,7 +94,7 @@ timing, receive drops during decoding, and completion rate remain unknown.
 The `firmware_integrity` example seals a linked application with a
 deterministic flash-only payload and a CRC-32 trailer. The robot scans the
 complete installed image and reports PASS/FAIL by serial and LED. Its default
-v3 build is 57,544 bytes (56.2 KiB); changing `PAYLOAD_BYTES` reseals without
+v3 build is 57,768 bytes (56.4 KiB); changing `PAYLOAD_BYTES` reseals without
 recompilation. Cross-build, ELF/raw boundary check, and host CRC corruption
 check pass. A damaged image may fail before the checker can run, and hardware
 execution has not yet been tested.
