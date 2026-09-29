@@ -2,8 +2,8 @@
 
 Date: 2026-09-28
 
-Status: Phases 1–4 software and host verification complete; hardware validation
-and pacing measurements pending.
+Status: Phases 1–4 software and host verification complete; initial robot
+uploads succeeded, but larger-image reliability and pacing remain unvalidated.
 
 ## Phase commit record
 
@@ -14,9 +14,9 @@ that the feature has been tested on hardware.
 | Phase | Final software commit | Host verification | Robot validation |
 | --- | --- | --- | --- |
 | 1 | `6afb76846663270bf2411c1b27728e18ab1f6b65` | Passed fault injection and v3 cross-build | Pending |
-| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: `Pogoboot>` entered upload mode but timed out before START; completion untested |
+| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: one 25,824-byte image verified; a 42,920-byte image was incomplete |
 | 3 | `95c0d8a09ccb4a9d57df140567b1af4c8d5d78d4` | Passed repeated-pass sender tests, receiver fault injection, and robot/remote v3 cross-builds | Pending; pacing measurements needed |
-| 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Partial: coded frames observed on robot, but decoder/completion untested |
+| 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Partial: 25,824-byte image verified with 16 chunks recovered; 42,920-byte image failed with 285/671 chunks received |
 
 Hardware follow-up: commit `c52585136636e5bd81ce3be9197524a9c47682ba`
 lets Pogobios enter upload mode from a CRC-checked v2 START if the separate
@@ -35,8 +35,24 @@ includes Q cancellation, while `7ae21f8` already includes the progress bar.
 Host fault injection, serial tests, and the normal robot cross-build pass. The
 user reflashed that normal image, but the next attempt still timed out in
 `Pogoboot>`: the package's combined bootloader had been built before these
-fixes. The bootloader has now been rebuilt and packaged with its updated
-Pogobios; hardware validation of the new bootloader remains pending.
+fixes. The bootloader was rebuilt and packaged with its updated Pogobios. A
+subsequent 25,824-byte coded upload succeeded on hardware; the 42,920-byte
+coded attempt ended with 285 of 671 chunks and many IR CRC errors.
+
+Retry follow-up: the PC now derives the 32-bit transfer ID from the first four
+bytes of SHA-256 of the exact firmware image. A new `rc_flash_robot` command for
+the same image can reuse the robot's RAM bitmap after a timeout or Q, while
+changed image metadata or failed flash verification forces an erase and restart.
+`rc_erase` explicitly clears the bitmap. The bitmap is not persisted through a
+robot reboot. An upload that has written data stores `FlashIsPar` beside the OK
+marker in the same 4 KiB sector: blue means no image data, orange means an
+incomplete image, and green means a CRC-verified image.
+
+This follow-up is implemented in Pogobot commit
+`a60bb694aa63835f82987b61dcc8949f7629dd6e` and SDK commit
+`d8f9536852e1fbf35731f095b0c72b00f7a2057f`. Host fault injection,
+terminal tests, and both v3 robot builds pass; same-image retry and LED colors
+still need a hardware trial.
 
 ## Objective
 
@@ -123,7 +139,9 @@ ABORT each carry the transfer ID (4). The existing SFL CRC-16 covers command
 and payload; outer IR SLIP CRC-32 protects the transported message. The image
 CRC uses CRC-32/ISO-HDLC over exact flash bytes, matching Python `zlib.crc32`.
 Only one image of 1–131072 bytes at mapped address `0x240000` or `0x260000` is
-accepted per transfer. Transfer IDs are random 32-bit values chosen by the PC.
+accepted per transfer. The PC derives the 32-bit transfer ID from SHA-256 of
+the exact image bytes; START still includes length and image CRC-32 so matching
+metadata is checked before retaining previously received chunks.
 
 | Message | Required information and purpose |
 | --- | --- |
@@ -157,8 +175,9 @@ restart operation for an image whose final flash verification fails.
       transfer. Make repeated completion messages safe.
 - [x] Before writing `FlashIsOK`, require the complete bitmap and compare a CRC-32
       computed from the exact image bytes in flash with the expected CRC.
-- [x] On timeout or abort, retain an invalid image. On reset, restart an incomplete
-      transfer unless progress metadata is deliberately persisted in a later design.
+- [x] On timeout or ABORT, retain an invalid image and its RAM bitmap for the
+      same-image retry. On reset, restart an incomplete transfer unless progress
+      metadata is deliberately persisted in a later design.
 
 Bitmap storage is small:
 

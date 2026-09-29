@@ -44,8 +44,8 @@ proposed repair sequence and its trade-offs.
 - Which exact binaries were deployed for the original 31-gap upload. The latest
   attempt used a robot installed from this checkout's previous v2.7.1 package;
   the remote image still needs independent confirmation.
-- Completion rate and upload duration across distances, orientations, lighting,
-  and robot counts.
+- Completion rate and upload duration for larger images across distances,
+  orientations, lighting, and robot counts.
 - Whether Phase 1 behavior is correct on hardware under real optical loss.
 
 ## Working analyses and implementation
@@ -129,7 +129,18 @@ Pogobios, but its prompt was `Pogoboot>`, whose separate combined bootloader
 image still contained the older Pogobios. That explains the repeated short
 blue blink, timeout, and absent START fallback. The bootloader has now been
 rebuilt with the same source, and its embedded Pogobios was verified against
-the build output; hardware validation remains pending.
+the build output. A subsequent 25,824-byte coded upload succeeded with 16 FEC
+recoveries. A 42,920-byte attempt reached only 285 of 671 chunks; both active
+IR receivers reported many CRC errors, while queue and ring drops stayed zero.
+
+Pogobot commit `a60bb69` and SDK commit `d8f9536` derive v2 IDs from SHA-256
+of the image. Another `rc_flash_robot` command can retain verified chunks after
+timeout or Q while the robot remains powered. A changed image or failed flash
+check starts with an erase; `rc_erase` clears RAM progress. A partial marker at
+`0x88010` records the first data write, so the LED is blue before data, orange
+for incomplete data, and green after verification. Host fault injection,
+terminal tests, and both robot cross-builds pass; the refreshed installer and
+SDK archive still need a hardware trial.
 
 ## Current decisions
 
@@ -160,10 +171,11 @@ the latest image and remote installer still need a hardware trial.
 
 ## Next concrete tasks
 
-1. Program the rebuilt v2.7.1 bootloader on a test robot with the updated
-   installer and retry using the already updated SDK. Confirm `IR v2 START`,
-   sustained fast blue blink, host progress, and final image CRC. If START
-   still prints as an ordinary message, capture its raw bytes and type.
+1. Program the updated v2.7.1 robot images, update the PC SDK terminal, and
+   retry the 42,920-byte image twice without rebooting or `rc_erase`. Confirm
+   the second attempt retains chunks, skips sector erases, and reaches CRC
+   verified completion. Check blue/orange/green idle LEDs across erase,
+   partial upload, and completion.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under
