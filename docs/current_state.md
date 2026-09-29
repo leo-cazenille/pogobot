@@ -109,9 +109,10 @@ works on a robot; an independent full-region readback has not been recorded.
 
 API v2.7.1 source commit `7f05f1e` rebuilt v3 bootloader, robot, remocon, and
 SDK artifacts. The new installer includes five binaries, corrected physical
-`iceprog` offsets, fail-fast scripts, and checksums. A separate SDK archive
-was generated. Host checks pass; programming these packaged images on hardware
-remains to be tested.
+`iceprog` offsets, scripts with the original `check_return` status reporting,
+and checksums. A separate SDK archive was generated. Host checks cover script
+success and failure paths; programming these packaged images on hardware remains
+to be tested.
 
 ## Current decisions
 
