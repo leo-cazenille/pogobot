@@ -1,33 +1,14 @@
 #!/bin/bash
+set -euo pipefail
 
-echo "using iceprog to program the remote"
+package_dir=$(cd "$(dirname "$0")" && pwd)
+marker_file=$(mktemp)
+trap 'rm -f "$marker_file"' EXIT
+printf 'FlashIsOK\n' > "$marker_file"
 
-echo "FlashIsOK" > Flash.bin
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m' # No Color
-
-check_return () {
-    if [[ "$1" = 0 ]]; then
-        echo -e " ${GREEN}-> OK${NC}"
-    else
-        echo -e " ${RED}-> NOK${NC}"
-        exit
-    fi
-}
-
-iceprog -o 0x0 bootloader/bootloader_pogobotv3/bootloader.bin
-check_return $?
-
-iceprog -o 0x240000 remocon/remocon_pogobotv3/gateware/remocon_pogobotv3.bin
-check_return $?
-
-iceprog -o 0x260000 remocon/remocon_pogobotv3/software/pogobios/pogobios.bin
-check_return $?
-
-iceprog -o 0x88000 Flash.bin
-check_return $?
-
-
-rm -f Flash.bin
+echo "Using iceprog to program the remote"
+# iceprog -o takes physical flash offsets, not CPU-mapped addresses.
+iceprog -o 0x0 "$package_dir/bootloader/bootloader_pogobotv3/bootloader.bin"
+iceprog -o 0x40000 "$package_dir/remocon/remocon_pogobotv3/gateware/remocon_pogobotv3.bin"
+iceprog -o 0x60000 "$package_dir/remocon/remocon_pogobotv3/software/pogobios/pogobios.bin"
+iceprog -o 0x88000 "$marker_file"
