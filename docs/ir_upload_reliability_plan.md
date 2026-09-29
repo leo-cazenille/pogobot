@@ -2,8 +2,9 @@
 
 Date: 2026-09-28
 
-Status: Phases 1–4 software and host verification complete; initial robot
-uploads succeeded, but larger-image reliability and pacing remain unvalidated.
+Status: Phases 1–4 software and host verification complete. A 42,920-byte image
+verified after five same-image retry commands; one-pass reliability and decoder
+timing remain unvalidated.
 
 ## Phase commit record
 
@@ -14,9 +15,9 @@ that the feature has been tested on hardware.
 | Phase | Final software commit | Host verification | Robot validation |
 | --- | --- | --- | --- |
 | 1 | `6afb76846663270bf2411c1b27728e18ab1f6b65` | Passed fault injection and v3 cross-build | Pending |
-| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: one 25,824-byte image verified; a 42,920-byte image was incomplete |
+| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: 25,824-byte image verified; 42,920-byte image verified after five same-image retry commands |
 | 3 | `95c0d8a09ccb4a9d57df140567b1af4c8d5d78d4` | Passed repeated-pass sender tests, receiver fault injection, and robot/remote v3 cross-builds | Pending; pacing measurements needed |
-| 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Partial: 25,824-byte image verified with 16 chunks recovered; 42,920-byte image failed with 285/671 chunks received |
+| 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Partial: 25,824-byte image verified with 16 chunks recovered; 42,920-byte image verified after five retries with FEC recovery on later passes |
 
 Hardware follow-up: commit `c52585136636e5bd81ce3be9197524a9c47682ba`
 lets Pogobios enter upload mode from a CRC-checked v2 START if the separate
@@ -51,8 +52,20 @@ incomplete image, and green means a CRC-verified image.
 This follow-up is implemented in Pogobot commit
 `a60bb694aa63835f82987b61dcc8949f7629dd6e` and SDK commit
 `d8f9536852e1fbf35731f095b0c72b00f7a2057f`. Host fault injection,
-terminal tests, and both v3 robot builds pass; same-image retry and LED colors
-still need a hardware trial.
+terminal tests, and both v3 robot builds pass. Same-image retry later completed
+a 42,920-byte image; the corrected LED behavior still needs a hardware trial.
+
+Receiver timing and LED follow-up: commit
+`6c426d85c6aab1481eac7a1a5426ad384ed506e5` keeps every active upload's
+fast blink blue, then shows blue for empty, orange for incomplete, or green for
+verified flash at the slow idle rate. The decoder now drains the IR receiver
+between FEC symbols and uses 512 bytes of read-only GF tables to reduce its
+compute time without extra RAM. The user-observed 42,920-byte upload retained
+16, 351, 544, 639, and 666 of 671 chunks, then verified on the fifth retry.
+Its pre-change FEC calls reached 165 ms against a 200 ms packet interval;
+each incomplete pass received END before the subsequent eight-second timeout.
+Host fault injection, exhaustive GF multiplication comparison, and both v3
+robot builds pass. The new decoder timing and LED behavior await robot testing.
 
 ## Objective
 
