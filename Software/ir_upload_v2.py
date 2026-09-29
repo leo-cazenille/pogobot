@@ -1,5 +1,6 @@
 """Versioned IR upload frames carried inside the existing SFL serial link."""
 
+import hashlib
 import struct
 import zlib
 
@@ -24,6 +25,11 @@ FEC_FLAG = 1
 FEC_DATA_COUNT = 16
 FEC_PARITY_COUNT = 4
 FEC_INTERLEAVE = 4
+
+
+def transfer_id_for_image(image):
+    """Use a stable image identity so another command can repair missed chunks."""
+    return int.from_bytes(hashlib.sha256(image).digest()[:4], "big")
 
 
 def _gf_multiply(a, b):

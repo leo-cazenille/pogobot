@@ -592,7 +592,8 @@ void update_led_status(void)
     }
 
 	// check is partial
-	flash_state = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET); 
+	flash_state = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET) ||
+                  check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET);
 	if(flash_state) {
         rgb_blink_set_color(40,15,0);
     }

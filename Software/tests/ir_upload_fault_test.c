@@ -645,13 +645,16 @@ static void test_v2_missing_tail_and_many_losses(void)
     append_v2_end(id);
     ir_boot_loop();
     CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
     CHECK(v2_upload.received == 2);
     reset_messages();
-    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_fec_start(id, SPIFLASH_BASE + 0x60000u, length,
+                        generated_image_crc(length));
     append_v2_data(id, 2, length);
     append_v2_end(id);
     ir_boot_loop();
     CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(v2_upload.fec_enabled);
     CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
 
     reset_device();
@@ -748,16 +751,15 @@ static void test_v2_rejected_data_and_restart(void)
     CHECK(v2_upload.failed && !check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
     failed_program_address = UINT32_MAX;
     reset_messages();
-    append_v2_abort(id);
-    ir_boot_loop();
-    CHECK(!v2_upload.active);
-    reset_messages();
+    // A new command for the same image must restart automatically after a
+    // failed flash readback; its earlier bitmap can no longer be trusted.
     append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
     append_v2_data(id, 0, length);
     append_v2_data(id, 1, length);
     append_v2_end(id);
     ir_boot_loop();
     CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 2);
 
     reset_device();
     append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, 0);
@@ -766,6 +768,53 @@ static void test_v2_rejected_data_and_restart(void)
     append_v2_end(id);
     ir_boot_loop();
     CHECK(v2_upload.failed && !check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void test_v2_retry_after_abort_and_explicit_erase(void)
+{
+    const uint32_t id = 0x23456789u;
+    const uint32_t length = 65u;
+    const uint32_t address = SPIFLASH_BASE + 0x60000u;
+    const uint32_t crc = generated_image_crc(length);
+    reset_device();
+    append_v2_start(id, address, length, crc);
+    ir_boot_loop();
+    CHECK(!check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    reset_messages();
+    append_v2_start(id, address, length, crc);
+    append_v2_data(id, 0, length);
+    append_v2_abort(id);  /* Q stops this broadcast without discarding data. */
+    ir_boot_loop();
+    CHECK(v2_upload.active && v2_upload.received == 1);
+    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    reset_messages();
+    append_v2_start(id, address, length, crc);
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    CHECK(chunk_writes[0x60000u / 64u] == 1);
+
+    // rc_erase clears the marker sector and calls the reset hook, forcing
+    // another START to erase and accept this same firmware from scratch.
+    ir_boot_reset_v2_upload();
+    spiBeginErase4(FLASH_OK_OFFSET);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(!check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
+    reset_messages();
+    append_v2_start(id, address, length, crc);
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 2);
 }
 
 static void test_v2_metadata_and_reset(void)
@@ -940,6 +989,7 @@ int main(int argc, char **argv)
     test_v2_three_pass_repair();
     test_v2_fec_rejects_malformed_parity();
     test_v2_rejected_data_and_restart();
+    test_v2_retry_after_abort_and_explicit_erase();
     test_v2_metadata_and_reset();
     test_v2_malformed_frames();
     test_v2_max_image();

@@ -203,8 +203,11 @@ define_command(spi_mm, spi_mm_handler, "Enable or disable memory-mapped spiflash
  * Erase user program in flash (Flag only + start prog)
  */
 static void erase_userprog_handler(int nb_params, char **params) {
-    
-    if ( check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET) || check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET)) {
+    // An explicit erase must also discard resumable v2 chunks in RAM.
+    ir_boot_reset_v2_upload();
+    if ( check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET) ||
+         check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET) ||
+         check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET)) {
         // Enable memory-mapped mode
         spiFree();
         //erase a part of the "flash is ok" token

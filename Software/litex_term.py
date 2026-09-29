@@ -19,9 +19,9 @@ import multiprocessing
 import argparse
 import json
 import socket
-import secrets
 
-from ir_upload_v2 import (image_frames, abort_payload, CMD_START, CMD_END,
+from ir_upload_v2 import (image_frames, abort_payload, transfer_id_for_image,
+                          CMD_START, CMD_END,
                           CMD_ABORT, CAPABILITY_BANNER, DEFAULT_COPIES,
                           DEFAULT_FEC_COPIES, MAX_COPIES, CHUNK_SIZE,
                           FEC_DATA_COUNT, FEC_PARITY_COUNT)
@@ -565,11 +565,13 @@ class LiteXTerm:
         # Count START and both END frames so 100% means the remote acknowledged
         # the complete pass, including its finalization request.
         frames_per_pass = chunks + parity_frames + 3
-        transfer_id = secrets.randbits(32)
+        # A later rc_flash_robot command must identify the same image so the
+        # robot can keep chunks already verified during an earlier attempt.
+        transfer_id = transfer_id_for_image(image)
         print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, "
               f"{len(image)} bytes, {self.ir_v2_copies} passes, "
               f"16+4 parity {'on' if self.ir_fec else 'off'}")
-        print("[LXTERM] Press Q to cancel this IR upload.")
+        print("[LXTERM] Press Q to cancel this IR upload; robots keep verified chunks for retry.")
         started = False
         last_percent = -1
         self.ir_v2_cancel_requested = False

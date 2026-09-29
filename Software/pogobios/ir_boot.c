@@ -374,14 +374,21 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
             upload_stats.malformed++;
             return 0;
         }
-        if (v2_upload.active && v2_upload.id == id &&
+        if (v2_upload.active && !v2_upload.failed && v2_upload.id == id &&
             v2_upload.offset == offset && v2_upload.length == length &&
-            v2_upload.expected_crc == expected_crc &&
-            v2_upload.fec_enabled == (p[1] == IR_V2_FLAG_FEC16X4))
-            return 0;  // A repeated START preserves the completed bitmap.
+            v2_upload.expected_crc == expected_crc) {
+            // Coding can change between attempts without changing image bytes.
+            // Drop buffered parity but retain every verified DATA chunk.
+            if (v2_upload.fec_enabled != (p[1] == IR_V2_FLAG_FEC16X4)) {
+                v2_upload.fec_enabled = (p[1] == IR_V2_FLAG_FEC16X4);
+                v2_upload.fec_mask = 0;
+            }
+            return 0;
+        }
 
         memset(&v2_upload, 0, sizeof(v2_upload));
         time_erase_marker();
+        update_led_status();  // The newly invalidated image has no data yet.
         flash_state_partial = 0;
         partial_known = 0;
         // Erase all image sectors before accepting DATA, including a lost first chunk.
@@ -440,6 +447,14 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         if (v2_upload.failed || v2_upload.complete)
             return 0;
         offset = v2_upload.offset + relative;
+        // Leave the OK marker erased until END verifies the whole image. The
+        // separate partial marker survives a timeout or power loss and lets
+        // completion write OK without another marker-sector erase.
+        if (v2_upload.received == 0) {
+            time_write(FLASH_V2_PARTIAL_OFFSET,
+                       (unsigned char *)FLASH_IS_PARTIAL, strlen(FLASH_IS_PARTIAL));
+            update_led_status();  // Partial data blinks orange during reception.
+        }
         time_write(offset, &frame->payload[IR_V2_DATA_HEADER_LENGTH], length);
         // A failed NOR write cannot be repaired by programming more zero bits.
         for (uint32_t i = 0; i < length; i++) {
@@ -496,9 +511,10 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         return 0;
     }
     if (frame->cmd == IR_V2_CMD_ABORT) {
-        time_erase_marker();
-        memset(&v2_upload, 0, sizeof(v2_upload));
-        printf("IR v2 transfer aborted\n");
+        // Q closes the current remote broadcast; keep the invalid image and
+        // its bitmap so another rc_flash_robot can send a repair copy.
+        printf("IR v2 broadcast stopped; %u of %u chunks retained\n",
+               (unsigned int)v2_upload.received, (unsigned int)v2_upload.chunks);
         return 1;
     }
     if (v2_upload.fec_mask)
@@ -506,7 +522,7 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
     if (v2_upload.complete)
         return 1;  // Repeated END has no flash side effects.
     if (v2_upload.failed) {
-        printf("IR v2 transfer failed; send ABORT then START to restart\n");
+        printf("IR v2 transfer failed; the next START will erase and restart\n");
         return 1;
     }
     if (v2_upload.received != v2_upload.chunks) {
@@ -523,6 +539,7 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
     }
     time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_OK, strlen(FLASH_IS_OK));
     v2_upload.complete = 1;
+    update_led_status();  // Verified data changes the active blink to green.
     printf("IR v2 image verified and complete\n");
     return 1;
 }
@@ -725,14 +742,19 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
     memset(erased_sectors, 0, sizeof(erased_sectors));
     started = 0;
     transfer_error = 0;
-    rgb_blink_set_time(5, 95);                      // Flash 5 ms every 100ms
-    rgb_blink_set_color(0, 0, 50);                  // Tel the user data is being received
+    rgb_blink_set_time(5, 95);  // Flash 5 ms every 100 ms while receiving.
+    update_led_status();       // Show the current validity before START arrives.
 
     flash_state_partial = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET);
     legacy_blocked = check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET) ||
                      v2_upload.active;
-    if (v2_upload.active)
+    if (v2_upload.active) {
+        // A new remote command can resume the RAM bitmap after timeout or Q.
+        if (v2_upload.received)
+            printf("IR v2 resume: %u of %u chunks retained\n",
+                   (unsigned int)v2_upload.received, (unsigned int)v2_upload.chunks);
         timeout = 8000000;
+    }
     pogobot_timer_init(&mytimer, timeout);
 
     if (flash_state_partial) {
@@ -866,6 +888,12 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
 void ir_boot_loop(void)
 {
     ir_boot_loop_with_initial(NULL);
+}
+
+void ir_boot_reset_v2_upload(void)
+{
+    // Called by erase_userprog before its marker/flash erase takes effect.
+    memset(&v2_upload, 0, sizeof(v2_upload));
 }
 
 uint8_t ir_boot_try_v2_start(const message_t *message)

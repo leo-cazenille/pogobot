@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import litex_term
 from ir_upload_v2 import (CMD_START, CMD_DATA, CMD_END, CMD_ABORT, CMD_PARITY,
-                          DEFAULT_COPIES)
+                          DEFAULT_COPIES, transfer_id_for_image)
 
 
 class RepeatedUploadTest(unittest.TestCase):
@@ -51,8 +51,7 @@ class RepeatedUploadTest(unittest.TestCase):
             sent.append((frame.cmd, frame.payload))
             return True
 
-        with patch.object(litex_term.secrets, "randbits", return_value=0x12345678):
-            length, output = self.upload(term, bytes(range(129)), record)
+        length, output = self.upload(term, bytes(range(129)), record)
         self.assertEqual(length, 129)
         expected = [CMD_START, CMD_DATA, CMD_DATA, CMD_DATA, CMD_END, CMD_END]
         for offset in (0, 6, 12):
@@ -71,6 +70,22 @@ class RepeatedUploadTest(unittest.TestCase):
         self.assertIn("Remote pass 1/3", output)
         self.assertIn("Remote pass 3/3", output)
         self.assertEqual(output.count("| 100%"), 3)
+
+    def test_new_command_reuses_image_id_and_changed_image_gets_new_id(self):
+        self.assertEqual(transfer_id_for_image(b"abc"), 0xba7816bf)
+        term = self.make_term(1)
+        sent = []
+
+        def record(frame):
+            if frame.cmd == CMD_START:
+                sent.append(struct.unpack(">I", frame.payload[2:6])[0])
+            return True
+
+        self.upload(term, b"same image", record)
+        self.upload(term, b"same image", record)
+        self.upload(term, b"new image!", record)
+        self.assertEqual(sent[:2], [transfer_id_for_image(b"same image")] * 2)
+        self.assertNotEqual(sent[1], sent[2])
 
     def test_one_pass_and_failure_abort(self):
         term = self.make_term(1)
