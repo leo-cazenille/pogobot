@@ -1,5 +1,9 @@
 # How to use the compiled binaries
 
+The current v3 package is [API v2.7.1](install_APIv2.7.1/README.md). Its
+matching SDK is in `sdk_APIv2.7.1.tar.gz`; verify the adjacent `.sha256` file
+before extracting it.
+
 ## Using the ice40 dev board
 
 If you have access to the ice40 dev board and the complementary pogobot board as in the Readme section " Upload an empty or faulty robot ",

@@ -94,20 +94,24 @@ timing, receive drops during decoding, and completion rate remain unknown.
 The `firmware_integrity` example seals a linked application with a
 deterministic flash-only payload and a CRC-32 trailer. The robot scans the
 complete installed image and reports PASS/FAIL by serial and LED. Its default
-v3 build is 57,768 bytes (56.4 KiB); changing `PAYLOAD_BYTES` reseals without
+v3 build is 57,784 bytes (56.4 KiB); changing `PAYLOAD_BYTES` reseals without
 recompilation. Cross-build, ELF/raw boundary check, and host CRC corruption
-check pass. A damaged image may fail before the checker can run, and hardware
-execution has not yet been tested.
+check pass. A damaged image may fail before the checker can run. The user
+reports the examples work on hardware; their test logs are not archived here.
 
 The v3 user flash page API accepts 16-bit page IDs and allocates physical
 offsets `0x90000–0x1fffff`: 5888 pages, the contiguous 1472 KiB after the
 reserved sectors on a 2 MiB v3 chip. Erasure covers 23 64 KiB sectors;
 out-of-range page IDs are rejected. The raw SPI address is corrected from the
 CPU-mapped `0x290000` to physical `0x90000`. The v3 normal Pogobios, SDK, and
-updated flash example cross-builds pass, but page read/write and erase
-boundaries still need robot validation.
+updated flash example cross-builds pass. The user reports the flash example
+works on a robot; an independent full-region readback has not been recorded.
 
-An untracked hardware history directory remains outside this verification work.
+API v2.7.1 source commit `7f05f1e` rebuilt v3 bootloader, robot, remocon, and
+SDK artifacts. The new installer includes five binaries, corrected physical
+`iceprog` offsets, fail-fast scripts, and checksums. A separate SDK archive
+was generated. Host checks pass; programming these packaged images on hardware
+remains to be tested.
 
 ## Current decisions
 
@@ -124,15 +128,17 @@ An untracked hardware history directory remains outside this verification work.
   measured optimum.
 - Target v3 heads with 2 MiB flash only; the user page API may use all
   physical flash from `0x90000` through `0x1fffff`.
+- Keep the API v2.7.1 installer limited to programming artifacts; distribute
+  the 111 MiB uncompressed SDK as a separate archive.
 
 ## Data limitations
 
 The current evidence is one failure log, source inspection, a simulated host
 device, and a cross-build. A gap does not locate the loss within the optical,
 interrupt, buffering, or flash path. The host harness uses mocked transport,
-flash, and timing; no instrumented hardware upload or image readback has been
-performed. The expanded user flash region has not been erased or read back on
-hardware.
+flash, and timing; no instrumented upload dataset or full flash dump has been
+archived. The new installer scripts have only been tested with a fake
+`iceprog`, not an attached robot or remote.
 
 ## Next concrete tasks
 
@@ -144,8 +150,7 @@ hardware.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under
    matched conditions. Use completion, decoder timing, and loss counters to
    tune pacing and redundancy.
-4. Upload `Software/example/firmware_integrity` as a 50–60 KiB image and record
-   its on-robot PASS/FAIL result alongside the receiver diagnostics.
-5. Run `Software/example/test_read_write_flash` on a test v3 robot to check
-   pages 0, 255, 256, 1791, 1792, and 5887 and confirm neighboring reserved
-   flash remains intact after the 23-sector erase.
+4. Save the on-robot `firmware_integrity` PASS/FAIL log and flash-page test
+   results for pages 0, 255, 256, 1791, 1792, and 5887.
+5. Program one test robot and each remote type from the API v2.7.1 package,
+   then verify the reported version and repeat the upload and flash tests.

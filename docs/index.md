@@ -14,3 +14,5 @@
   a 50–60 KiB upload image with an on-robot flash CRC check.
 - [API reference](../pogodocs.md) and [SDK 2.7 notes](../Software/SDK_2_7.md):
   application functions and release changes.
+- [API v2.7.1 installer](../Software/binary_installation/install_APIv2.7.1/README.md):
+  v3 programming binaries, scripts, checksums, and release validation status.
