@@ -11,6 +11,9 @@ snapshot, including local changes.
   `pogobios/ir_boot.c`, `pogolib/pogolib_infrared.c`, `pogolib/ir_uart.c`, and
   `pogolib/slip.c`, along with relevant headers and generated flash addresses.
 - The user-provided log of a failed Pogowall or Pogoshower firmware upload.
+- A hardware Pogoshower attempt where the new remote advertised v2 but the PC
+  initially used an old SDK terminal, followed by a v2 attempt whose START,
+  DATA, and parity frames reached Pogobios without its `ir_flash` command.
 - Host fault injection of the production IR upload, UART ring, and SLIP decoder
   sources in `Software/tests/ir_upload_fault_test.c`.
 - The example build rules, v3 linker flash bounds, and startup copy path for
@@ -114,6 +117,15 @@ and checksums. A separate SDK archive was generated. Host checks cover script
 success and failure paths; programming these packaged images on hardware remains
 to be tested.
 
+The first hardware attempt reported 148 legacy gaps because the PC used an old
+terminal despite the remote's v2 banner. After updating the SDK, a 25,824-byte
+v2 coded attempt sent START/DATA/parity, but the robot's Pogobios printed them
+as ordinary messages and never entered `ir_flash`; its fast blue upload blink
+therefore never started. Follow-up source commit `c525851` lets a CRC-checked
+START enter the upload loop directly and restores a remote-acknowledged host
+progress bar. The robot build and host tests pass. The standalone SDK fix is
+`7ae21f8`; robot validation of the new entry path remains pending.
+
 ## Current decisions
 
 - Measure coded and uncoded timing and completion on hardware before changing
@@ -134,8 +146,8 @@ to be tested.
 
 ## Data limitations
 
-The current evidence is one failure log, source inspection, a simulated host
-device, and a cross-build. A gap does not locate the loss within the optical,
+The current evidence is two hardware attempt logs, source inspection, a
+simulated host device, and cross-builds. A gap does not locate the loss within the optical,
 interrupt, buffering, or flash path. The host harness uses mocked transport,
 flash, and timing; no instrumented upload dataset or full flash dump has been
 archived. The new installer scripts have only been tested with a fake
@@ -143,9 +155,9 @@ archived. The new installer scripts have only been tested with a fake
 
 ## Next concrete tasks
 
-1. Validate Phase 2 flash readback, CRC, incomplete marker state, and the
-   provisional erase pause on suitable hardware before production use. Update
-   the SDK terminal and helper before testing `make connect TTY=...`.
+1. Program the follow-up robot Pogobios image and use SDK commit `7ae21f8`;
+   verify that a missed `ir_flash` command is recovered by v2 START, the fast
+   blue blink appears, and the host progress reaches 100% per pass.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under

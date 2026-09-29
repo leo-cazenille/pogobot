@@ -14,9 +14,15 @@ that the feature has been tested on hardware.
 | Phase | Final software commit | Host verification | Robot validation |
 | --- | --- | --- | --- |
 | 1 | `6afb76846663270bf2411c1b27728e18ab1f6b65` | Passed fault injection and v3 cross-build | Pending |
-| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Pending |
+| 2 | `b04b557044e78d07a14879d926f911764f60bd59` | Passed versioned fault injection, serial auto-selection tests, and robot/remote v3 cross-builds | Partial: a robot received v2 frames but missed the entry command; completion untested |
 | 3 | `95c0d8a09ccb4a9d57df140567b1af4c8d5d78d4` | Passed repeated-pass sender tests, receiver fault injection, and robot/remote v3 cross-builds | Pending; pacing measurements needed |
-| 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Pending; decoder timing and completion measurements needed |
+| 4 | `21a7120f12d08c4b37553f22bba0775284a0afda` | Passed GF(256) matrix checks, 64 KiB cross-language recovery fixtures, malformed/over-capacity/CRC fault tests, and robot/remote v3 cross-builds | Partial: coded frames observed on robot, but decoder/completion untested |
+
+Hardware follow-up: commit `c52585136636e5bd81ce3be9197524a9c47682ba`
+lets Pogobios enter upload mode from a CRC-checked v2 START if the separate
+`ir_flash` command is missed. The matching SDK progress display is commit
+`7ae21f8` in `pogobot-sdk`. Host fault injection and the v3 robot cross-build
+pass; this recovery path still needs robot validation.
 
 ## Objective
 
