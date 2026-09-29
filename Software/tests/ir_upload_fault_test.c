@@ -97,6 +97,7 @@ static uint8_t hardware_fifo[700];
 static unsigned int hardware_count, hardware_read;
 static uint8_t encoded[128];
 static unsigned int encoded_count, decoded_count;
+static int led_r, led_g, led_b, blink_fast;
 
 uint16_t crc16(const unsigned char *data, unsigned int length)
 {
@@ -151,10 +152,26 @@ void pogobot_timer_init(time_reference_t *timer, uint32_t timeout)
 { timer->hardware_value_at_time_origin = clock_us + timeout; }
 int pogobot_timer_has_expired(time_reference_t *timer)
 { clock_us += 1000; return clock_us >= timer->hardware_value_at_time_origin; }
-void rgb_blink_set_time(int on, int off) { (void)on; (void)off; }
-void rgb_blink_set_color(int r, int g, int b) { (void)r; (void)g; (void)b; }
-void rgb_blink(void) {}
-void update_led_status(void) {}
+void rgb_blink_set_time(int on, int off)
+{ (void)on; blink_fast = (off == 95); }
+void rgb_blink_set_color(int r, int g, int b)
+{ led_r = r; led_g = g; led_b = b; }
+void rgb_blink(void)
+{
+    // Any active packet-processing interval must keep the fast blink blue.
+    if (blink_fast && (led_r != 0 || led_g != 0 || led_b != 50))
+        abort();
+}
+void update_led_status(void)
+{
+    if (check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET))
+        rgb_blink_set_color(0, 40, 0);
+    else if (check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET) ||
+             check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET))
+        rgb_blink_set_color(40, 15, 0);
+    else
+        rgb_blink_set_color(0, 0, 40);
+}
 void pogobot_infrared_update(void) {}
 int pogobot_infrared_message_available(void)
 { return clock_us >= message_release_us && message_read < message_count; }
@@ -220,7 +237,26 @@ static void reset_device(void)
     failed_program_address = UINT32_MAX;
     partial_known = 0;  /* A fresh test starts with a fresh robot boot. */
     memset(&v2_upload, 0, sizeof(v2_upload));
+    led_r = led_g = led_b = blink_fast = 0;
     ir_uart_init();
+}
+
+static void test_fec_gf_tables(void)
+{
+    // Exhaustively compare the ROM lookup against polynomial multiplication.
+    for (unsigned int a = 0; a < 256; a++) {
+        for (unsigned int b = 0; b < 256; b++) {
+            uint8_t x = a, y = b, product = 0;
+            for (unsigned int bit = 0; bit < 8; bit++) {
+                if (y & 1u) product ^= x;
+                uint8_t carry = x & 0x80u;
+                x <<= 1;
+                if (carry) x ^= 0x1du;
+                y >>= 1;
+            }
+            CHECK(fec_gf_multiply(a, b) == product);
+        }
+    }
 }
 
 static void assert_chunks(unsigned int first, unsigned int end)
@@ -781,6 +817,7 @@ static void test_v2_retry_after_abort_and_explicit_erase(void)
     ir_boot_loop();
     CHECK(!check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
     CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(!blink_fast && led_r == 0 && led_g == 0 && led_b == 40);
 
     reset_messages();
     append_v2_start(id, address, length, crc);
@@ -790,6 +827,7 @@ static void test_v2_retry_after_abort_and_explicit_erase(void)
     CHECK(v2_upload.active && v2_upload.received == 1);
     CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
     CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(!blink_fast && led_r == 40 && led_g == 15 && led_b == 0);
 
     reset_messages();
     append_v2_start(id, address, length, crc);
@@ -798,6 +836,7 @@ static void test_v2_retry_after_abort_and_explicit_erase(void)
     append_v2_end(id);
     ir_boot_loop();
     CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(!blink_fast && led_r == 0 && led_g == 40 && led_b == 0);
     CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
     CHECK(chunk_writes[0x60000u / 64u] == 1);
 
@@ -972,6 +1011,7 @@ static void test_python_fec_large_fixture(const char *path)
 int main(int argc, char **argv)
 {
     CHECK(argc == 9);
+    test_fec_gf_tables();
     test_complete_image();
     test_ten_missing_and_duplicates();
     test_thirty_one_missing();

@@ -56,13 +56,16 @@ test with a fake `iceprog` checked both installers' file paths, offsets,
 marker contents, cleanup, and failure behavior.
 
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
-image was rebuilt with `make bootloader` so `Pogoboot>` uses the same retry and
-LED behavior. Its combined image contains a 71,764-byte Pogobios at offset
+image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
+uses the same retry and LED behavior. Its combined image contains a
+72,244-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
-so an incomplete upload blinks orange; a verified image blinks green. Active
-uploads blink quickly, while the idle status blink is slow.
+so an incomplete upload blinks orange; a verified image blinks green. During
+every active upload, including a retry, the LED blinks quickly in blue. The
+blue, orange, or green idle status blink is slow.
 Q preserves verified chunks for a later same-image retry. Reboot loses the RAM
 bitmap, and changing images forces a fresh erase. Host fault injection and
-both robot cross-builds pass. The new retry and LED behavior still needs a
-hardware trial.
+both robot cross-builds pass. FEC decoding now drains the IR receiver between
+symbols and uses 512 bytes of read-only GF tables to reduce compute time. Its
+new timing and the corrected LED colors still need a hardware trial.

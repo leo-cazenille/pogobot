@@ -139,8 +139,21 @@ timeout or Q while the robot remains powered. A changed image or failed flash
 check starts with an erase; `rc_erase` clears RAM progress. A partial marker at
 `0x88010` records the first data write, so the LED is blue before data, orange
 for incomplete data, and green after verification. Host fault injection,
-terminal tests, and both robot cross-builds pass; the refreshed installer and
-SDK archive still need a hardware trial.
+terminal tests, and both robot cross-builds pass. On hardware, a 42,920-byte
+image reached 16, 351, 544, 639, 666, and finally all 671 chunks across
+same-image retry commands; the final whole-image CRC passed. Some four-erasure
+FEC calls took 80–165 ms, close to the 200 ms packet interval. The final
+verified pass also spent 692 ms processing END, mostly on whole-image CRC.
+END was received on each incomplete pass, so the eight-second timeout followed
+missing chunks rather than a stalled decoder. The three active receivers each
+reported hundreds of SLIP CRC failures per pass, with no queue or ring drops.
+
+The current receiver drains IR input between FEC symbols and uses 512 bytes of
+read-only GF tables to shorten multiplication. Fast blinking remains blue for
+every active upload; the slow idle blink reflects the flash markers: blue for
+empty, orange for partial, and green for verified. Host fault injection and
+both v3 robot cross-builds pass. The rebuilt bootloader embeds the new receiver.
+Decoder timing and LED colors for this build still need a robot trial.
 
 ## Current decisions
 
@@ -163,21 +176,22 @@ SDK archive still need a hardware trial.
 ## Data limitations
 
 The current evidence is several hardware attempt logs, source inspection, a
-simulated host device, and cross-builds. A gap does not locate the loss within the optical,
-interrupt, buffering, or flash path. The host harness uses mocked transport,
-flash, and timing; no instrumented upload dataset or full flash dump has been
-archived. The robot installer has programmed a head with `iceprog` verification;
-the latest image and remote installer still need a hardware trial.
+simulated host device, and cross-builds. A gap does not locate the loss within
+the optical, interrupt, buffering, or flash path. The host harness uses mocked
+transport, flash, and timing; it cannot measure target decoder speed. No
+instrumented upload dataset or full flash dump has been archived. The robot
+installer has programmed a head with `iceprog` verification; the current
+decoder and LED changes still need a hardware trial.
 
 ## Next concrete tasks
 
-1. Program the updated v2.7.1 robot images, update the PC SDK terminal, and
-   retry the 42,920-byte image twice without rebooting or `rc_erase`. Confirm
-   the second attempt retains chunks, skips sector erases, and reaches CRC
-   verified completion. Check blue/orange/green idle LEDs across erase,
-   partial upload, and completion.
+1. Program the current v2.7.1 robot image and bootloader. Retry the
+   42,920-byte image without rebooting or `rc_erase`; record FEC decode maxima,
+   remaining chunks, and completion time. Check fast blue during upload and
+   slow blue/orange/green after erase, partial upload, and completion.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
-   and final image integrity for both remote types.
+   and final image integrity for both remote types. Compare with the earlier
+   five-command retry sequence.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under
    matched conditions. Use completion, decoder timing, and loss counters to
    tune pacing and redundancy.
