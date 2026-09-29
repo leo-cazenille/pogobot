@@ -68,6 +68,9 @@ class RepeatedUploadTest(unittest.TestCase):
         self.assertEqual(sent[4][1], sent[5][1])
         self.assertIn("Remote acknowledged pass 3/3", output)
         self.assertIn("robot completion unconfirmed", output)
+        self.assertIn("Remote pass 1/3", output)
+        self.assertIn("Remote pass 3/3", output)
+        self.assertEqual(output.count("| 100%"), 3)
 
     def test_one_pass_and_failure_abort(self):
         term = self.make_term(1)

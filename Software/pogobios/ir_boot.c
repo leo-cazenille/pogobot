@@ -705,7 +705,7 @@ static uint8_t exec_frame_cmd(struct sfl_frame *frame)
     return 0;
 }
 
-void ir_boot_loop(void) {
+static void ir_boot_loop_with_initial(const message_t *initial) {
     time_reference_t mytimer;
     uint32_t timeout = 2000000;  // The versioned mode allows longer erase preparation.
     struct sfl_frame * frame;
@@ -716,6 +716,7 @@ void ir_boot_loop(void) {
     uint32_t malformed_start;
     uint8_t stopped = 0;
     uint8_t legacy_blocked;
+    uint8_t initial_pending = initial != NULL;
 
     memset(&upload_stats, 0, sizeof(upload_stats));
     next_addr = 0;
@@ -759,8 +760,15 @@ void ir_boot_loop(void) {
         pogobot_infrared_update();
         rgb_blink();
         /* Get one Frame */
-        if( pogobot_infrared_message_available() ) {
-            pogobot_infrared_recover_next_message( &msg );
+        if(initial_pending || pogobot_infrared_message_available()) {
+            // A START received in the Pogobios command loop must not be lost
+            // when it hands control to the upload loop.
+            if (initial_pending) {
+                msg = *initial;
+                initial_pending = 0;
+            } else {
+                pogobot_infrared_recover_next_message(&msg);
+            }
             if (msg.header._packet_type != ir_t_flash)
                 continue;
 
@@ -851,4 +859,24 @@ void ir_boot_loop(void) {
     }
     rgb_blink_set_time(5, 995);
     update_led_status();
+}
+
+void ir_boot_loop(void)
+{
+    ir_boot_loop_with_initial(NULL);
+}
+
+uint8_t ir_boot_try_v2_start(const message_t *message)
+{
+    // The normal Pogobios loop may miss the separate ir_flash command.
+    // A complete START frame is an independent, CRC-protected entry point.
+    if (message->header._packet_type != ir_t_flash ||
+        message->header.payload_length != IR_V2_START_LENGTH + 4u)
+        return 0;
+    struct sfl_frame *frame = (struct sfl_frame *)message->payload;
+    if (frame->cmd != IR_V2_CMD_START ||
+        frame->payload_length != IR_V2_START_LENGTH || !check_crc(frame))
+        return 0;
+    ir_boot_loop_with_initial(message);
+    return 1;
 }

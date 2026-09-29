@@ -23,7 +23,8 @@ import secrets
 
 from ir_upload_v2 import (image_frames, abort_payload, CMD_START, CMD_END,
                           CMD_ABORT, CAPABILITY_BANNER, DEFAULT_COPIES,
-                          DEFAULT_FEC_COPIES, MAX_COPIES)
+                          DEFAULT_FEC_COPIES, MAX_COPIES, CHUNK_SIZE,
+                          FEC_DATA_COUNT, FEC_PARITY_COUNT)
 
 # Console ------------------------------------------------------------------------------------------
 
@@ -552,14 +553,35 @@ class LiteXTerm:
         # A single in-memory image gives START and final CRC identical bytes.
         with open(filename, "rb") as source:
             image = source.read()
+        chunks = (len(image) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        parity_frames = ((chunks + FEC_DATA_COUNT - 1) // FEC_DATA_COUNT
+                         * FEC_PARITY_COUNT if self.ir_fec else 0)
+        # Count START and both END frames so 100% means the remote acknowledged
+        # the complete pass, including its finalization request.
+        frames_per_pass = chunks + parity_frames + 3
         transfer_id = secrets.randbits(32)
         print(f"[LXTERM] IR v2 transfer {transfer_id:08x}: {filename}, "
               f"{len(image)} bytes, {self.ir_v2_copies} passes, "
               f"16+4 parity {'on' if self.ir_fec else 'off'}")
         started = False
+        last_percent = -1
         try:
             for pass_number in range(1, self.ir_v2_copies + 1):
                 pass_start = time.monotonic()
+                acknowledged = 0
+                last_percent = -1
+
+                def show_progress():
+                    nonlocal last_percent
+                    percent = 100 * acknowledged // frames_per_pass
+                    if percent != last_percent:
+                        filled = 20 * percent // 100
+                        sys.stdout.write(f"\r[LXTERM] Remote pass {pass_number}/{self.ir_v2_copies} "
+                                         f"|{'=' * filled}>{' ' * (20 - filled)}| {percent}%")
+                        sys.stdout.flush()
+                        last_percent = percent
+
+                show_progress()
                 # START, all DATA, and END are repeated with one transfer ID;
                 # receivers keep accepted chunks and skip duplicate writes.
                 for command, payload in image_frames(image, address, transfer_id,
@@ -568,6 +590,8 @@ class LiteXTerm:
                     frame.cmd, frame.payload = command, payload
                     if not self.send_frame(frame):
                         raise IOError("remote rejected IR v2 frame")
+                    acknowledged += 1
+                    show_progress()
                     if command == CMD_START:
                         started = True
                     if command == CMD_END:
@@ -576,10 +600,15 @@ class LiteXTerm:
                 # the first completion message was lost over infrared.
                 if not self.send_frame(completion_frame):
                     raise IOError("remote rejected repeated IR v2 END frame")
+                acknowledged += 1
+                show_progress()
+                print()
                 elapsed = time.monotonic() - pass_start
                 print(f"[LXTERM] Remote acknowledged pass {pass_number}/{self.ir_v2_copies} "
                       f"in {elapsed:.1f}s; robot completion unconfirmed.")
         except Exception:
+            if 0 <= last_percent < 100:
+                print()
             if started:
                 abort = SFLFrame()
                 abort.cmd, abort.payload = CMD_ABORT, abort_payload(transfer_id)

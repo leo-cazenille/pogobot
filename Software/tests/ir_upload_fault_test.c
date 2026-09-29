@@ -21,6 +21,7 @@
 #define SFL_CMD_LOAD 1
 #define SFL_CMD_JUMP 2
 #define SFL_CMD_ABORT 0
+#define ir_t_cmd 1
 #define ir_t_flash 2
 #define IR_UPLOAD_FLASH_READ(offset) flash_bytes[offset]
 
@@ -550,6 +551,35 @@ static void append_v2_abort(uint32_t id)
     append_v2(IR_V2_CMD_ABORT, payload, sizeof(payload));
 }
 
+static void test_v2_start_enters_from_pogobios(void)
+{
+    const uint32_t id = 0xfeed1234u;
+    const uint32_t length = 65u;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length,
+                    generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    // The command loop has already dequeued START; the upload loop must
+    // process that exact frame before consuming the queued DATA and END.
+    message_read = 1;
+    CHECK(ir_boot_try_v2_start(&messages[0]));
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(upload_stats.frames == 4 && v2_upload.received == 2);
+
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length,
+                    generated_image_crc(length));
+    struct sfl_frame *frame = (struct sfl_frame *)messages[0].payload;
+    frame->crc[0] ^= 1;
+    CHECK(!ir_boot_try_v2_start(&messages[0]));
+    CHECK(!v2_upload.active && message_read == 0);
+    frame->crc[0] ^= 1;
+    messages[0].header._packet_type = ir_t_cmd;
+    CHECK(!ir_boot_try_v2_start(&messages[0]));
+}
+
 static void test_v2_reorder_and_short_tail(void)
 {
     const uint32_t id = 0x12345678u;
@@ -881,6 +911,7 @@ int main(int argc, char **argv)
     test_uart_full_ring();
     test_slip_overflow_resync();
     demonstrate_legacy_protocol_limits();
+    test_v2_start_enters_from_pogobios();
     test_v2_reorder_and_short_tail();
     test_v2_missing_tail_and_many_losses();
     test_v2_three_pass_repair();
