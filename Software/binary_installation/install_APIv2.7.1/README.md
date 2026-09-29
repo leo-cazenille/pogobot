@@ -2,8 +2,9 @@
 
 This package targets Pogobot v3 heads with 2 MiB SPI flash and their remotes.
 The initial images were built from source commit
-`7f05f1edad0328e6ca6eead2ba531d09b5263a33`. The robot Pogobios image
-also includes the upload-entry fix from `c52585136636e5bd81ce3be9197524a9c47682ba`
+`7f05f1edad0328e6ca6eead2ba531d09b5263a33`. Both the bootloader's
+embedded Pogobios and the normal robot Pogobios image include the upload-entry
+fix from `c52585136636e5bd81ce3be9197524a9c47682ba`
 and the longer initial receive wait from `869c86c089f934c4fa578a1a40c845f18c51bc10`.
 The SDK terminal shows progress for each remote-acknowledged pass and accepts
 Q to cancel an active v2 upload (SDK commit `80f69eb0419e33f3eef515ae547d0d7aac3843a1`).
@@ -52,9 +53,12 @@ fit their flash slots, and the package checksums pass. The packaged SDK's
 test with a fake `iceprog` checked both installers' file paths, offsets,
 marker contents, cleanup, and failure behavior.
 
-The follow-up robot Pogobios was rebuilt with `make software`; the SDK archive
+The normal robot Pogobios was rebuilt with `make software`; the bootloader
+image was then rebuilt with `make bootloader` so `Pogoboot>` uses the same
+upload fixes. Its combined image contains the new 71,516-byte Pogobios at
+offset `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. The SDK archive
 was refreshed with progress and Q cancellation. The eight-second initial wait
-and v2 START entry path pass host fault injection and the robot cross-build.
-Robot upload validation of this latest image is pending. The robot installer
-script programmed a head and `iceprog` verified its previous image; the new
-image and remote installer have not yet been tried on hardware.
+and v2 START entry path pass host fault injection and both robot cross-builds.
+Robot upload validation of the rebuilt bootloader remains pending. The robot
+installer programmed a head and `iceprog` verified its previous image; this
+updated bootloader and the remote installer have not yet been tried on hardware.

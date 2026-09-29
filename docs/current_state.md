@@ -12,9 +12,8 @@ snapshot, including local changes.
   `pogolib/slip.c`, along with relevant headers and generated flash addresses.
 - The user-provided log of a failed Pogowall or Pogoshower firmware upload.
 - Hardware Pogoshower attempts where the new remote advertised v2, including
-  one with an old PC terminal and one where the robot entered `ir_flash` but
-  timed out before START arrived. The latter then printed START, DATA, and
-  parity frames as ordinary Pogobios messages.
+  one with an old PC terminal and later attempts where `Pogoboot>` entered
+  `ir_flash` but timed out before START arrived.
 - Host fault injection of the production IR upload, UART ring, and SLIP decoder
   sources in `Software/tests/ir_upload_fault_test.c`.
 - The example build rules, v3 linker flash bounds, and startup copy path for
@@ -120,18 +119,17 @@ success and failure paths. A robot was programmed and verified with the previous
 package image; the latest image and remote still need testing.
 
 The first hardware attempt reported 148 legacy gaps because the PC used an old
-terminal despite the remote's v2 banner. In a later 25,824-byte coded attempt,
-the robot printed START/DATA/parity as ordinary messages. Source commit
-`c525851` added a CRC-checked START entry path and host progress display;
-SDK commit `7ae21f8` carries the progress display. With that robot image
-programmed and verified by `iceprog`, another attempt logged `frames=0` in
-`ir_flash`, then printed START/DATA/parity as ordinary messages. The remote
-repeats the entry command for about two seconds before PC handshake, while
-the robot's initial wait was two seconds. Source commit `869c86c` extends
-that wait to eight seconds and adds Q cancellation. SDK commit `80f69eb`
-adds cancellation; the test computer remains at older SDK commit `647cc55`,
-which explains its missing progress bar. Host tests and robot cross-build pass;
-the updated robot image has not yet been tried on hardware.
+terminal despite the remote's v2 banner. Later attempts reported `frames=0` in
+`ir_flash`, then printed START/DATA/parity as ordinary messages. Source commit
+`c525851` added a CRC-checked START entry path; `869c86c` extended the initial
+wait from two to eight seconds and added Q cancellation. SDK commits `7ae21f8`
+and `80f69eb` provide the remote-acknowledged progress bar and cancellation;
+the user now sees the bar. The robot was reflashed with the new normal
+Pogobios, but its prompt was `Pogoboot>`, whose separate combined bootloader
+image still contained the older Pogobios. That explains the repeated short
+blue blink, timeout, and absent START fallback. The bootloader has now been
+rebuilt with the same source, and its embedded Pogobios was verified against
+the build output; hardware validation remains pending.
 
 ## Current decisions
 
@@ -153,7 +151,7 @@ the updated robot image has not yet been tried on hardware.
 
 ## Data limitations
 
-The current evidence is three hardware attempt logs, source inspection, a
+The current evidence is several hardware attempt logs, source inspection, a
 simulated host device, and cross-builds. A gap does not locate the loss within the optical,
 interrupt, buffering, or flash path. The host harness uses mocked transport,
 flash, and timing; no instrumented upload dataset or full flash dump has been
@@ -162,11 +160,10 @@ the latest image and remote installer still need a hardware trial.
 
 ## Next concrete tasks
 
-1. Update the test computer's `~/leo/pogosim/pogobot-sdk` to at least
-   `80f69eb`, program the latest robot Pogobios image, and retry. Confirm
-   `IR v2 START`, the fast blue blink, host progress, and final image CRC.
-   If frames still print as ordinary messages, capture a START frame's raw
-   bytes to diagnose why the direct START entry path did not engage.
+1. Program the rebuilt v2.7.1 bootloader on a test robot with the updated
+   installer and retry using the already updated SDK. Confirm `IR v2 START`,
+   sustained fast blue blink, host progress, and final image CRC. If START
+   still prints as an ordinary message, capture its raw bytes and type.
 2. Record per-receiver errors, queue and ring drops, flash timings, upload time,
    and final image integrity for both remote types.
 3. Compare one coded pass, repeated coded passes, and uncoded passes under
