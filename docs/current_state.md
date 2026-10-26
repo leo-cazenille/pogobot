@@ -102,7 +102,7 @@ timing, receive drops during decoding, and completion rate remain unknown.
 The `firmware_integrity` example seals a linked application with a
 deterministic flash-only payload and a CRC-32 trailer. The robot scans the
 complete installed image and reports PASS/FAIL by serial and LED. Its default
-v3 build is 57,784 bytes (56.4 KiB); changing `PAYLOAD_BYTES` reseals without
+v3 build is 57,752 bytes (56.4 KiB); changing `PAYLOAD_BYTES` reseals without
 recompilation. Cross-build, ELF/raw boundary check, and host CRC corruption
 check pass. A damaged image may fail before the checker can run. The user
 reports the examples work on hardware; their test logs are not archived here.
@@ -181,6 +181,11 @@ IR payloads, FIFO backpressure, full security-register writes, negative timer
 values, and counter wraparound. Target builds and hardware validation are
 tracked separately in the IR plan and installer notes. Applications must be
 rebuilt against the updated static SDK library to receive the library fixes.
+Source commit `b07404f` cross-builds for the robot, bootloader, and remote.
+All 32 examples compile from a clean SDK package, whose library retains the
+same 163 exported symbols. The standalone SDK branch `sdk_2_7_1` is refreshed
+at `d61344d`; its integrity example's SDK path is corrected. Native sanitizer
+tests and 18 Python upload tests pass. Hardware validation is pending.
 
 ## Current decisions
 

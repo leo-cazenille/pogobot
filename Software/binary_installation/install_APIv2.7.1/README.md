@@ -16,8 +16,16 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `7b8ee218f5d74aa81f5c07303fdddd502d12f0cb` using the existing
+source commit `b07404fc577135adecb12d338edef0f01959c87a` using the existing
 gateware.
+
+This build fixes the eight release-review findings while preserving the public
+C API. Serial frames and IR payloads are checked before copying. Application
+updates invalidate the marker and cached IR state before changing code, and
+marker writes are verified before success is reported. IR finalization can be
+retried after a marker failure while retaining image data. The library also
+fixes FIFO backpressure, full security-register writes, and signed timer
+conversions. Rebuild user applications with the refreshed SDK library.
 
 ## Contents
 
@@ -66,7 +74,7 @@ marker contents, cleanup, and failure behavior.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-70,420-byte Pogobios at offset
+71,180-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -80,3 +88,10 @@ compute time. The linker copies those tables from flash into SRAM, so they
 occupy 512 bytes in each memory. The separate coefficient table uses another
 64 bytes in each. The decoder timing, LED colors, and rejection of legacy
 uploads still need a hardware trial.
+
+The production C receiver, cable loader, remote forwarder, and library API
+tests pass with address and undefined-behavior sanitizers configured to stop
+on errors. All 18 Python upload tests pass. A clean SDK package compiled all
+32 examples; its library retains the same 163 exported symbols. The standalone
+SDK's integrity and flash-page examples also cross-build. The current release
+fixes await hardware validation.

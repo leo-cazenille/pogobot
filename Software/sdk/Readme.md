@@ -27,6 +27,11 @@ We designed a robot with motors, SoC (system-on-chip) inside a
 iCE40LP8K FPGA chip including a softcore processor, motors, sensors, LED, IR communication.
 This SDK allows you to compile and upload code on the robot.
 
+The updated v2.7.1 library checks IR payload lengths before copying and waits
+for FIFO space before each transmitted byte. It also corrects full
+security-register writes and signed timer conversions. Rebuild applications
+with this SDK to include these fixes. Public function signatures are unchanged.
+
 Please visit : https://github.com/nekonaute/pogobot-sdk or https://github.com/nekonaute/pogobot
 
 Requirements

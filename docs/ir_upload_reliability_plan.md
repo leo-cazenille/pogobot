@@ -80,6 +80,23 @@ this source commit. Hardware validation of legacy-frame rejection is pending.
 The GF memory accounting is corrected: 512 bytes of lookup tables and 64 bytes
 of coefficients occupy SRAM as well as flash under the current linker.
 
+Release safety follow-up: source commit
+`b07404fc577135adecb12d338edef0f01959c87a` fixes the eight release-review
+findings without changing the public C API. Cable and remote reception share
+a bounded parser. Cable application writes invalidate the boot marker and IR
+cache first; write/marker readback protects finalization. IR marker failures
+retain image progress for a later END retry. IR send bounds and FIFO checks,
+security-register loops and bounds, and signed timer conversions are corrected.
+Native tests exercise the production cable/IR interaction and low-level
+library code with fatal sanitizer errors. The SPI sender's unused shift
+accumulator was also removed after the tests exposed undefined behavior.
+
+Robot, bootloader, and remote cross-builds pass, along with 18 Python upload
+tests and all 32 examples from a clean SDK package. The standalone SDK update
+is commit `d61344d6d6eb431fb6fece31db5d4097b2f32392`; the library retains all
+163 exported symbols. The installer images and SDK archive were refreshed
+from the source commit above. Hardware validation of these fixes is pending.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,
