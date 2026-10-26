@@ -59,8 +59,9 @@ Receiver timing and LED follow-up: commit
 `6c426d85c6aab1481eac7a1a5426ad384ed506e5` keeps every active upload's
 fast blink blue, then shows blue for empty, orange for incomplete, or green for
 verified flash at the slow idle rate. The decoder now drains the IR receiver
-between FEC symbols and uses 512 bytes of read-only GF tables to reduce its
-compute time without extra RAM. The user-observed 42,920-byte upload retained
+between FEC symbols and uses 512 bytes of GF lookup tables to reduce its
+compute time. The linker copies these tables from flash into SRAM; their
+cost is 512 bytes in each memory. The user-observed 42,920-byte upload retained
 16, 351, 544, 639, and 666 of 671 chunks, then verified on the fifth retry.
 Its pre-change FEC calls reached 165 ms against a 200 ms packet interval;
 each incomplete pass received END before the subsequent eight-second timeout.
@@ -78,7 +79,7 @@ Use receiver correctness, image verification, configurable repetition, and
 packet-level forward error correction (FEC) for one-way broadcasts. Measure
 reliability and upload time on robots before tuning redundancy and pacing.
 
-## Evidence from the current implementation
+## Evidence from the original receiver
 
 The reported log contains 31 missing chunks, each indicated by an address gap of
 `0x40` (64 bytes), but prints only nine stored missing addresses.
@@ -126,15 +127,16 @@ counting paths; buffer exhaustion cannot indefinitely block reception processing
 diagnostics distinguish observed CRC failures from observed buffer drops.
 
 Host verification: run `python3 Software/tests/run_ir_upload_fault_test.py` from
-the repository root. The fault suite compiles the production receiver, UART
+the repository root. At Phase 1, the fault suite compiled the production receiver, UART
 ring, and SLIP decoder with AddressSanitizer and UndefinedBehaviorSanitizer.
-It covers a 60 KiB image, ten and 31 missing chunks, duplicates, timeout,
+It covered a 60 KiB image, ten and 31 missing chunks, duplicates, timeout,
 abort, malformed commands and lengths, forbidden destinations, lost first and
 sector-boundary chunks, sector-spanning frames, UART ring exhaustion, and SLIP
 resynchronization. It found a sector-spanning erase defect, which was fixed.
 Mocked flash timings and host IR input do not establish hardware performance.
-Known probes show that missing final chunks, wrong-image repairs, and a reboot
-during partial recovery remain outside Phase 1's guarantees.
+Those probes showed that missing final chunks, wrong-image repairs, and a reboot
+during partial recovery remained outside Phase 1's guarantees. The current
+receiver rejects the legacy IR protocol entirely.
 
 ## Phase 2: introduce explicit transfer metadata and a receive bitmap
 
@@ -298,13 +300,18 @@ any `k <= 4` missing data symbols. The PC sends DATA for four groups in
 interleaved order, followed by each group's four parity frames. The remote
 forwards parity without computing it.
 
-The robot's `v2_upload` state occupies 540 bytes of BSS, including its existing
-256-byte receive bitmap and one 256-byte parity group. The decoder uses a
-384-byte RISC-V stack frame and a 64-byte coefficient table in read-only data;
-its compiled function is 1,740 bytes. Current v3 Pogobios ELF sizes are
+At the initial Phase 4 commit, the robot's `v2_upload` state occupied 540 bytes
+of BSS, including its existing 256-byte receive bitmap and one 256-byte parity
+group. The decoder used a 384-byte RISC-V stack frame and a 64-byte coefficient
+table in read-only data; its compiled function was 1,740 bytes. The v3 Pogobios
+ELF sizes at that commit were
 71,180 bytes text / 14,216 bytes BSS on a robot and 61,268 bytes text /
 10,656 bytes BSS on a remote. Measure actual decoder and flash timing on
 hardware; host mocks report zero microseconds.
+
+The current linker puts `.rodata` in the SRAM `.data` section and copies it
+from flash at startup. The 64-byte coefficient table and the later 512-byte
+GF lookup tables therefore consume 576 bytes of SRAM as well as flash space.
 
 The matching updated remote is assumed, so the existing versioned upload
 announcement selects FEC automatically without a second capability banner.

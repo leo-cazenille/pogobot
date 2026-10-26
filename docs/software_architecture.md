@@ -151,10 +151,12 @@ The documented physical flash offsets are:
 | `0x080000` | through `0x08ffff` | Reserved 64 KiB erase block; `FlashIsOK` / `FlashIsPar` marker at `0x088000` |
 | `0x090000` | through `0x1fffff` | V3 user-writable pages (1472 KiB, 5888 pages) |
 
-The linker places executable/read-only application content in flash-backed
-`rom`, copies initialized data to SRAM, puts BSS in SRAM, and starts the stack
-at the top of the 128 KiB SRAM. This makes RAM/stack pressure important even
-when flash capacity is ample. In particular, each long IR message is about
+The linker keeps startup code in flash-backed `rom`. It places ordinary C
+code and `.rodata` in `.data`, copies that section from flash to SRAM at
+startup, puts BSS in SRAM, and starts the stack at the top of the 128 KiB SRAM.
+Constant lookup tables therefore consume SRAM as well as flash space. This
+makes RAM/stack pressure important even when flash capacity is ample. In
+particular, each long IR message is about
 390 bytes and `pogolib_infrared.c` statically allocates per-receiver SLIP
 buffers plus a 20-message queue.
 

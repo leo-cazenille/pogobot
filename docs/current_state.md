@@ -1,6 +1,6 @@
 # Current repository state
 
-Updated: 2026-09-29. Branch: `optimized_remote_transfer`; this is a working-tree
+Updated: 2026-10-26. Branch: `optimized_remote_transfer`; this is a working-tree
 snapshot, including local changes.
 
 ## Inspected
@@ -59,18 +59,20 @@ SLIP resynchronization. That testing found and fixed an erase bug when one
 frame spans two sectors. The Pogobios v3 cross-build succeeds with RISC-V GCC
 10.1.0. Hardware validation remains outstanding.
 
-Host probes also confirm legacy protocol limits: a missing final chunk can
-still set `FlashIsOK`; a replacement chunk from another image can complete
-a partial transfer; and repair cannot resume after reboot. The new Phase 2
-mode uses metadata and image CRC to address the first two limits.
+The legacy IR receiver has been removed. Its missing-final-chunk sequence and
+legacy LOAD/JUMP/ABORT frames now leave flash unchanged, including existing
+partial or valid images. Mixed legacy frames cannot complete or abort a v2
+upload. The remote rejects legacy programming frames and uses serial JUMP
+only to close the PC transfer.
 
 Phase 2 now adds versioned START/DATA/END/ABORT SFL frames, a 256-byte maximum
 receive bitmap, flash readback after each chunk, and exact-image CRC-32 before
 `FlashIsOK`. The remote announces support before the existing serial request,
 so the SDK terminal selects this mode automatically for the example Makefiles'
 single-image `make connect TTY=...` command. The optional `--ir-v2` flag remains
-for manual use. Direct cable uploads and older remotes use the legacy mode;
-SDK copies of the terminal must be updated. The remote forwards new commands
+for manual use. Direct cable uploads use the existing serial protocol;
+IR programming requires the current remote and SDK terminal. The remote
+forwards new commands
 with a provisional three-second erase pause. Host fault injection passes for
 reordered chunks, missing first and last chunks, 31 losses, the 128 KiB size
 limit, metadata changes, readback failure, CRC mismatch, and a Python-generated
@@ -149,11 +151,19 @@ missing chunks rather than a stalled decoder. The three active receivers each
 reported hundreds of SLIP CRC failures per pass, with no queue or ring drops.
 
 The current receiver drains IR input between FEC symbols and uses 512 bytes of
-read-only GF tables to shorten multiplication. Fast blinking remains blue for
+GF lookup tables to shorten multiplication. The linker copies these tables
+from flash into SRAM, so their cost is 512 bytes in each memory. The separate
+64-byte coefficient table also occupies both flash and SRAM. Fast blinking
+remains blue for
 every active upload; the slow idle blink reflects the flash markers: blue for
 empty, orange for partial, and green for verified. Host fault injection and
 both v3 robot cross-builds pass. The rebuilt bootloader embeds the new receiver.
 Decoder timing and LED colors for this build still need a robot trial.
+
+The release review also reproduced serial-frame and public IR-send buffer
+overflows, stale cable/IR validity state, unchecked validity-marker writes,
+TX FIFO drops, a 256-byte security-register write loop, and incorrect signed
+timer conversions. Those findings remain open release work.
 
 ## Current decisions
 

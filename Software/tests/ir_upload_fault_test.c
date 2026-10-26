@@ -235,7 +235,6 @@ static void reset_device(void)
     message_release_us = 0;
     clock_us = 0;
     failed_program_address = UINT32_MAX;
-    partial_known = 0;  /* A fresh test starts with a fresh robot boot. */
     memset(&v2_upload, 0, sizeof(v2_upload));
     led_r = led_g = led_b = blink_fast = 0;
     ir_uart_init();
@@ -243,7 +242,7 @@ static void reset_device(void)
 
 static void test_fec_gf_tables(void)
 {
-    // Exhaustively compare the ROM lookup against polynomial multiplication.
+    // Exhaustively compare the GF lookup against polynomial multiplication.
     for (unsigned int a = 0; a < 256; a++) {
         for (unsigned int b = 0; b < 256; b++) {
             uint8_t x = a, y = b, product = 0;
@@ -264,146 +263,6 @@ static void assert_chunks(unsigned int first, unsigned int end)
     for (unsigned int chunk = first; chunk < end; chunk++)
         for (unsigned int byte = 0; byte < 64; byte++)
             CHECK(flash_bytes[0x60000u + chunk * 64u + byte] == pattern(chunk, byte));
-}
-
-static void test_complete_image(void)
-{
-    reset_device();
-    for (unsigned int i = 0; i < 960; i++) append_chunk(i);  /* 60 KiB */
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(upload_stats.accepted == 960);
-    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
-    assert_chunks(0, 960);
-}
-
-static void test_ten_missing_and_duplicates(void)
-{
-    reset_device();
-    for (unsigned int i = 0; i < 30; i++)
-        if (i < 2 || i >= 12) append_chunk(i);
-    append_chunk(12);  /* Repeated complete chunk must not be rewritten. */
-    append_jump();
-    ir_boot_loop();
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-    CHECK(missing_count == 10 && missing_total == 10);
-    CHECK(chunk_writes[(0x60000u + 12 * 64u) / 64] == 1);
-
-    reset_messages();
-    for (unsigned int i = 2; i < 12; i++) append_chunk(i);
-    append_chunk(2);  /* Repeated recovered chunk must not be counted twice. */
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(upload_stats.accepted == 10 && upload_stats.duplicates == 1);
-    CHECK(chunk_writes[(0x60000u + 2 * 64u) / 64] == 1);
-    assert_chunks(0, 30);
-}
-
-static void test_thirty_one_missing(void)
-{
-    reset_device();
-    append_chunk(0);
-    append_chunk(32);
-    append_jump();
-    ir_boot_loop();
-    CHECK(missing_total == 0);  /* Invalid sessions discard their RAM repair list. */
-    CHECK(upload_stats.gaps == 31);
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(!check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-}
-
-static void test_timeout_and_abort(void)
-{
-    reset_device();
-    append_chunk(0);
-    append_chunk(1);
-    ir_boot_loop();  /* No JUMP; the simulated timer expires. */
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    reset_messages();
-    append_chunk(0);
-    append_frame(SFL_CMD_ABORT, 0, 0);
-    ir_boot_loop();
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    reset_messages();
-    for (unsigned int i = 0; i < 3; i++) append_chunk(i);
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    assert_chunks(0, 3);
-}
-
-static void test_invalid_frames(void)
-{
-    reset_device();
-    append_chunk(1);  /* Lost first chunk cannot establish a fresh transfer. */
-    append_jump();
-    ir_boot_loop();
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-
-    reset_device();
-    append_frame(SFL_CMD_LOAD, 0x30000u, 64);  /* Bootloader destination. */
-    append_jump();
-    ir_boot_loop();
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(sector_erases[0x30000u / SPIFLASH_SECTOR_SIZE] == 0);
-
-    reset_device();
-    append_chunk(0);
-    ((struct sfl_frame *)messages[0].payload)->crc[0] ^= 1;
-    append_jump();
-    ir_boot_loop();
-    CHECK(upload_stats.crc_errors == 1);
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-
-    reset_device();
-    append_chunk(0);
-    messages[0].header.payload_length--;
-    append_jump();
-    ir_boot_loop();
-    CHECK(upload_stats.malformed == 1);
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-
-    reset_device();
-    append_frame(99, 0, 0);  /* Unsupported SFL command. */
-    append_jump();
-    ir_boot_loop();
-    CHECK(upload_stats.malformed == 1);
-    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-}
-
-static void test_missing_sector_boundary(void)
-{
-    reset_device();
-    for (unsigned int i = 0; i < 1024; i++) append_chunk(i);
-    append_chunk(1025);  /* Chunk 1024 at 0x70000 is lost. */
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-    CHECK(sector_erases[0x70000u / SPIFLASH_SECTOR_SIZE] == 1);
-    reset_messages();
-    append_chunk(1024);
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    assert_chunks(1023, 1026);
-}
-
-static void test_frame_crossing_sector_boundary(void)
-{
-    reset_device();
-    /* Simulate old contents in the second sector, as on a reused robot. */
-    memset(&flash_bytes[0x70000u], 0, SPIFLASH_SECTOR_SIZE);
-    for (unsigned int i = 0; i < 1023; i++) append_chunk(i);
-    append_frame(SFL_CMD_LOAD, 0x6ffc0u, 128);
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(sector_erases[0x70000u / SPIFLASH_SECTOR_SIZE] == 1);
-    for (unsigned int byte = 0; byte < 128; byte++)
-        CHECK(flash_bytes[0x6ffc0u + byte] == pattern(1023, byte));
 }
 
 static void test_uart_full_ring(void)
@@ -461,50 +320,6 @@ static void test_slip_overflow_resync(void)
     for (unsigned int i = 0; i < encoded_count; i++)
         slip_decode_received_byte(&receiver, encoded[i]);
     CHECK(decoded_count == 1);
-}
-
-static void demonstrate_legacy_protocol_limits(void)
-{
-    reset_device();
-    for (unsigned int i = 0; i < 3; i++) append_chunk(i);
-    append_jump();  /* The intended fourth/final chunk has no on-wire manifest. */
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    puts("KNOWN LIMIT: a missing final chunk is not detectable");
-
-    reset_device();
-    append_chunk(0);
-    append_chunk(2);
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-    reset_messages();
-    append_chunk(1);
-    struct sfl_frame *replacement = (struct sfl_frame *)messages[0].payload;
-    replacement->payload[4] ^= 0xff;  /* Different image, valid frame CRC. */
-    uint16_t crc = crc16(&replacement->cmd, replacement->payload_length + 1);
-    replacement->crc[0] = crc >> 8;
-    replacement->crc[1] = crc;
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
-    CHECK(flash_bytes[0x60040u] != pattern(1, 0));
-    puts("KNOWN LIMIT: a same-address repair can belong to a different image");
-
-    reset_device();
-    append_chunk(0);
-    append_chunk(2);
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-    partial_known = 0;  /* Simulate a robot reboot losing the RAM address list. */
-    reset_messages();
-    append_chunk(1);
-    append_jump();
-    ir_boot_loop();
-    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET));
-    CHECK(upload_stats.accepted == 0);
-    puts("KNOWN LIMIT: partial repair cannot resume after robot reboot");
 }
 
 static void put_u16(uint8_t *p, uint16_t value)
@@ -588,6 +403,67 @@ static void append_v2_abort(uint32_t id)
     uint8_t payload[4];
     put_u32(payload, id);
     append_v2(IR_V2_CMD_ABORT, payload, sizeof(payload));
+}
+
+static void test_legacy_ir_cannot_modify_flash(void)
+{
+    static uint8_t before[SPIFLASH_SIZE];
+    // Legacy packets must preserve empty, partially written, and valid images.
+    for (unsigned int state = 0; state < 4; state++) {
+        reset_device();
+        memset(&flash_bytes[0x60000u], 0xa5, IR_V2_SLOT_SIZE);
+        if (state == 1)
+            memcpy(&flash_bytes[FLASH_V2_PARTIAL_OFFSET], FLASH_IS_PARTIAL,
+                   strlen(FLASH_IS_PARTIAL));
+        if (state == 2)
+            memcpy(&flash_bytes[FLASH_OK_OFFSET], FLASH_IS_OK, strlen(FLASH_IS_OK));
+        if (state == 3)  // An older upload may have left its partial marker here.
+            memcpy(&flash_bytes[FLASH_OK_OFFSET], FLASH_IS_PARTIAL,
+                   strlen(FLASH_IS_PARTIAL));
+        memcpy(before, flash_bytes, sizeof(before));
+
+        // Reproduce the old missing-final-chunk sequence, then try legacy ABORT.
+        for (unsigned int i = 0; i < 3; i++) append_chunk(i);
+        append_jump();
+        append_frame(SFL_CMD_ABORT, 0, 0);
+        ir_boot_loop();
+        CHECK(upload_stats.frames == 5 && upload_stats.malformed == 5);
+        CHECK(upload_stats.accepted == 0 && upload_stats.erases == 0);
+        CHECK(!v2_upload.active);
+        CHECK(memcmp(before, flash_bytes, sizeof(before)) == 0);
+    }
+}
+
+static void test_legacy_ir_cannot_complete_or_abort_v2(void)
+{
+    const uint32_t id = 0x10203040u, length = 129u;
+    const uint32_t address = SPIFLASH_BASE + 0x60000u;
+    reset_device();
+    append_v2_start(id, address, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_chunk(2);  // A legacy replacement cannot fill the missing v2 tail.
+    append_jump();
+    append_frame(SFL_CMD_ABORT, 0, 0);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(upload_stats.malformed == 3 && upload_stats.accepted == 2);
+    CHECK(v2_upload.active && v2_upload.received == 2 && !v2_upload.complete);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
+    CHECK(flash_bytes[0x60080u] == 0xff);
+
+    reset_messages();
+    append_v2_start(id, address, length, generated_image_crc(length));
+    append_frame(SFL_CMD_ABORT, 0, 0);
+    append_v2_data(id, 2, length);
+    append_jump();
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(upload_stats.malformed == 2);
+    CHECK(upload_stats.accepted == 1 && upload_stats.erases == 0);
+    CHECK(v2_upload.received == 3 && v2_upload.complete);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
 }
 
 static void test_v2_start_enters_from_pogobios(void)
@@ -1012,16 +888,10 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 9);
     test_fec_gf_tables();
-    test_complete_image();
-    test_ten_missing_and_duplicates();
-    test_thirty_one_missing();
-    test_timeout_and_abort();
-    test_invalid_frames();
-    test_missing_sector_boundary();
-    test_frame_crossing_sector_boundary();
+    test_legacy_ir_cannot_modify_flash();
+    test_legacy_ir_cannot_complete_or_abort_v2();
     test_uart_full_ring();
     test_slip_overflow_resync();
-    demonstrate_legacy_protocol_limits();
     test_v2_start_enters_from_pogobios();
     test_v2_start_after_remote_handshake();
     test_v2_reorder_and_short_tail();

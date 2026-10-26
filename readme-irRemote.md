@@ -63,9 +63,10 @@ After starting the remote with `run`, enter `rc_flash_robot` at its prompt.
 The updated remote announces versioned IR support before requesting the image,
 and the updated terminal selects that mode automatically for the single firmware
 image in the example Makefile. `--ir-v2` remains an optional manual override;
-it is not needed for this command. Direct cable uploads keep the legacy upload
-behavior. A two-entry `images.json` also stays on the legacy
-path; upload each image separately for versioned IR transfers.
+it is not needed for this command. IR programming requires versioned frames;
+legacy LOAD/JUMP/ABORT broadcasts are rejected. Direct cable uploads use the
+existing serial protocol. Use a two-entry `images.json` over a cable, or upload
+each image separately for versioned IR transfers.
 
 The current version accepts one image per transfer in the gateware slot
 (`0x240000`) or firmware slot (`0x260000`), up to 128 KiB. The PC sends a versioned

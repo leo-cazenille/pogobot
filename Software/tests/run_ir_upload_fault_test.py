@@ -22,6 +22,11 @@ STUB_HEADERS = (
     "pogobot_ir.h",
     "libbase/crc.h",
     "libbase/spiflash.h",
+    "libbase/uart.h",
+    "libbase/console.h",
+    "libbase/progress.h",
+    "libbase/jsmn.h",
+    "helpers.h",
 )
 
 
@@ -134,6 +139,17 @@ def main():
         subprocess.run([str(executable), str(fixture),
                         *(str(path) for path in fec_fixtures),
                         str(large_fixture), str(repeated_fixture)], check=True)
+
+        # Exercise the actual remote switch: legacy LOAD must never reach IR,
+        # while v2 forwarding, cancellation, and serial-only JUMP still work.
+        remote_executable = temp_dir / "ir_remote_upload_test"
+        subprocess.run([
+            "cc", "-std=c11", "-O1", "-g", "-Wall", "-Wextra",
+            "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+            "-I", str(temp_dir), "-I", str(TEST_DIR.parent / "pogobios"),
+            str(TEST_DIR / "ir_remote_upload_test.c"), "-o", str(remote_executable),
+        ], check=True)
+        subprocess.run([str(remote_executable)], check=True, timeout=10)
 
 
 if __name__ == "__main__":

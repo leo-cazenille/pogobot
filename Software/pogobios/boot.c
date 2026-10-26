@@ -442,46 +442,14 @@ int flash_robot(void)
 			continue;
 		}
     
-		/* Execute Frame CMD */
-		switch(frame.cmd) {
-			/* On SFL_CMD_ABORT ... */
-			case SFL_CMD_ABORT:
-				/* Reset failures */
-				failures = 0;
-
-				send_flash_message((char *)&frame, frame.payload_length + 4);
-				/* to be refined */ 
-				msleep(200);
-				/* Acknowledge and exit */
-				uart_write(SFL_ACK_SUCCESS);
-				return 1;
-
-			/* On SFL_CMD_LOAD... */
-			case SFL_CMD_LOAD:
-
-				/* Reset failures */
-				failures = 0;
-               
-				send_flash_message((char *)&frame, frame.payload_length + 4);
-				/* to be refined */ 
-				msleep(200);
-				/* Acknowledge */
+        /* Execute Frame CMD */
+        switch(frame.cmd) {
+            // JUMP only closes the PC connection after a versioned upload.
+            // Legacy LOAD/ABORT is rejected by default and never broadcast.
+            case SFL_CMD_JUMP:
+                failures = 0;
                 uart_write(SFL_ACK_SUCCESS);
-				break;
-
-			/* On SFL_CMD_JUMP... */
-			case SFL_CMD_JUMP:
-				/* Reset failures */
-				failures = 0;
-                // A versioned image is finalized by END; JUMP only exits the remote command.
-                if (!v2_mode) {
-                    send_flash_message((char *)&frame, frame.payload_length + 4);
-                    msleep(200);
-                }
-				/* Acknowledge and jump */
-				uart_write(SFL_ACK_SUCCESS);
                 return 0;
-				break;
 
             case IR_V2_CMD_START:
                 if (frame.payload_length != IR_V2_START_LENGTH) {

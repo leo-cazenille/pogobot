@@ -27,24 +27,11 @@
 #include <libbase/spiflash.h>
 #include <pogobot.h>
 
-#define NB_MISSING_ADDR 10
-// IR uploads occupy the current gateware and firmware slots, ending before the validity marker.
+// Versioned IR uploads are restricted to the current gateware and firmware slots.
 #define IR_FLASH_START 0x40000u
 #define IR_FLASH_END 0x80000u
 
-static uint32_t next_addr;
 const char * ir_magic_req = IR_MAGIC_REQ;
-static uint32_t missing_addr[NB_MISSING_ADDR];
-static uint32_t missing_total;
-static uint8_t missing_count;
-static uint8_t chunk_size;
-// Track each erase sector in the upload window using the generated sector size.
-static uint8_t erased_sectors[((IR_FLASH_END - IR_FLASH_START) /
-                               SPIFLASH_SECTOR_SIZE + 7) / 8];
-static uint8_t flash_state_partial;
-static uint8_t partial_known;
-static uint8_t started;
-static uint8_t transfer_error;
 
 static struct {
     uint32_t frames;
@@ -52,7 +39,7 @@ static struct {
     uint32_t duplicates;
     uint32_t malformed;
     uint32_t crc_errors;
-    uint32_t gaps;
+    uint32_t gaps;  // Kept at zero for compatibility with existing upload logs.
     uint32_t erases;
     uint32_t erase_us;
     uint32_t erase_max_us;
@@ -97,7 +84,8 @@ static const uint8_t fec_coefficients[IR_V2_FEC_PARITY_COUNT][IR_V2_FEC_DATA_COU
 };
 
 // Powers of primitive element 2 and their logs in GF(256)/0x11d.
-// ROM tables replace eight bitwise rounds per multiply without using RAM.
+// The linker copies .rodata into SRAM: these tables occupy 512 bytes in both
+// the flash image and SRAM, replacing eight bitwise rounds per multiply.
 static const uint8_t fec_gf_exp[256] = {
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1d, 0x3a, 0x74, 0xe8, 0xcd, 0x87, 0x13, 0x26,
     0x4c, 0x98, 0x2d, 0x5a, 0xb4, 0x75, 0xea, 0xc9, 0x8f, 0x03, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0,
@@ -157,39 +145,6 @@ static uint8_t fec_gf_inverse(uint8_t value)
         exponent >>= 1;
     }
     return result;
-}
-
-static int missing_index(uint32_t addr)
-{
-    for (uint8_t i = 0; i < missing_count; i++) {
-        if (missing_addr[i] == addr)
-            return i;
-    }
-    return -1;
-}
-
-static void record_gap(uint32_t from, uint32_t to, uint32_t chunk_size)
-{
-    // Keep a bounded repair list; an overflow makes this transfer incomplete.
-    uint32_t count = (to - from) / chunk_size;
-    uint32_t available = NB_MISSING_ADDR - missing_count;
-    uint32_t retained = count < available ? count : available;
-
-    for (uint32_t i = 0; i < retained; i++)
-        missing_addr[missing_count++] = from + i * chunk_size;
-
-    missing_total += count;
-    upload_stats.gaps += count;
-    if (retained != count)
-        transfer_error = 1;
-}
-
-static void print_missing_list(void)
-{
-    printf("Missing addresses:");
-    for (uint8_t i = 0; i < missing_count; i++)
-        printf(" %lx", (unsigned long)missing_addr[i]);
-    printf("\n");
 }
 
 static void time_erase_marker(void)
@@ -428,8 +383,6 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
 
         memset(&v2_upload, 0, sizeof(v2_upload));
         time_erase_marker();
-        flash_state_partial = 0;
-        partial_known = 0;
         // Erase all image sectors before accepting DATA, including a lost first chunk.
         uint32_t first = offset / SPIFLASH_SECTOR_SIZE;
         uint32_t last = (offset + length - 1) / SPIFLASH_SECTOR_SIZE;
@@ -611,154 +564,6 @@ void print_frame(struct sfl_frame* frame) {
     printf("\n");
 }
 
-static uint8_t exec_frame_cmd(struct sfl_frame *frame)
-{
-    uint32_t addr;
-    uint32_t offset;
-    uint32_t length;
-    int recovered;
-
-    switch (frame->cmd) {
-    case SFL_CMD_ABORT:
-        time_erase_marker();
-        missing_count = 0;
-        missing_total = 0;
-        partial_known = 0;
-        started = 0;
-        printf("IR transfer aborted\n");
-        return 1;
-
-    case SFL_CMD_LOAD:
-        if (frame->payload_length <= 4) {
-            upload_stats.malformed++;
-            transfer_error = 1;
-            break;
-        }
-        addr = get_uint32(&frame->payload[0]);
-        length = frame->payload_length - 4;
-        if (addr < SPIFLASH_BASE) {
-            upload_stats.malformed++;
-            transfer_error = 1;
-            break;
-        }
-        offset = addr - SPIFLASH_BASE;
-        if (offset < IR_FLASH_START || offset >= IR_FLASH_END ||
-            offset >= SPIFLASH_SIZE || length > IR_FLASH_END - offset ||
-            length > SPIFLASH_SIZE - offset) {
-            upload_stats.malformed++;
-            transfer_error = 1;
-            break;
-        }
-
-        if (flash_state_partial) {
-            recovered = missing_index(offset);
-            if (recovered < 0) {
-                upload_stats.duplicates++;
-                break;
-            }
-            if (length != chunk_size) {
-                upload_stats.malformed++;
-                transfer_error = 1;
-                break;
-            }
-        } else if (!started) {
-            // Without an image manifest, a fresh transfer must start at a known slot base.
-            if (offset != IR_FLASH_START && offset != 0x60000u) {
-                upload_stats.malformed++;
-                transfer_error = 1;
-                break;
-            }
-            started = 1;
-            next_addr = offset;
-            chunk_size = length;
-            time_erase_marker();
-            recovered = -1;
-        } else if (offset < next_addr) {
-            recovered = missing_index(offset);
-            if (recovered < 0) {
-                upload_stats.duplicates++;
-                break;
-            }
-            if (length != chunk_size) {
-                upload_stats.malformed++;
-                transfer_error = 1;
-                break;
-            }
-        } else {
-            recovered = -1;
-        }
-
-        if (recovered < 0 && offset > next_addr) {
-            uint32_t gap = offset - next_addr;
-            // The legacy stream has no length metadata for missing frames.
-            // Its first data frame determines the only recoverable gap stride.
-            if (gap % chunk_size != 0) {
-                upload_stats.malformed++;
-                transfer_error = 1;
-                break;
-            }
-            record_gap(next_addr, offset, chunk_size);
-        }
-
-        if (!flash_state_partial) {
-            // Erase each touched sector once, even when its boundary packet was lost.
-            uint32_t first = (offset - IR_FLASH_START) / SPIFLASH_SECTOR_SIZE;
-            uint32_t last = (offset + length - 1 - IR_FLASH_START) /
-                            SPIFLASH_SECTOR_SIZE;
-            for (uint32_t sector = first; sector <= last; sector++) {
-                uint8_t bit = 1u << (sector & 7u);
-                if (!(erased_sectors[sector >> 3] & bit)) {
-                    time_erase_sector(IR_FLASH_START + sector * SPIFLASH_SECTOR_SIZE);
-                    erased_sectors[sector >> 3] |= bit;
-                }
-            }
-        }
-
-        time_write(offset, &frame->payload[4], length);
-        upload_stats.accepted++;
-        if (recovered >= 0) {
-            missing_addr[recovered] = missing_addr[--missing_count];
-            missing_total--;
-        } else {
-            next_addr = offset + length;
-        }
-        break;
-
-    case SFL_CMD_JUMP:
-        time_erase_marker();
-        if (!started || transfer_error || missing_total != 0) {
-            printf("IR upload incomplete: %lu missing chunks%s\n",
-                   (unsigned long)missing_total,
-                   transfer_error ? ", transfer error" : "");
-            if (missing_count)
-                print_missing_list();
-            if (started && !transfer_error && missing_total == missing_count &&
-                missing_total <= NB_MISSING_ADDR) {
-                time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_PARTIAL,
-                           strlen(FLASH_IS_PARTIAL));
-                flash_state_partial = 1;
-                partial_known = 1;
-            } else {
-                partial_known = 0;
-            }
-            return 1;
-        }
-        time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_OK,
-                   strlen(FLASH_IS_OK));
-        missing_count = 0;
-        missing_total = 0;
-        partial_known = 0;
-        printf("IR upload complete\n");
-        return 1;
-
-    default:
-        upload_stats.malformed++;
-        transfer_error = 1;
-        break;
-    }
-    return 0;
-}
-
 static void ir_boot_loop_with_initial(const message_t *initial) {
     time_reference_t mytimer;
     // The remote spends about two seconds repeating ir_flash before the PC
@@ -771,20 +576,12 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
     uint32_t queue_drop_start;
     uint32_t malformed_start;
     uint8_t stopped = 0;
-    uint8_t legacy_blocked;
     uint8_t initial_pending = initial != NULL;
 
     memset(&upload_stats, 0, sizeof(upload_stats));
-    next_addr = 0;
-    memset(erased_sectors, 0, sizeof(erased_sectors));
-    started = 0;
-    transfer_error = 0;
     rgb_blink_set_time(5, 95);  // Flash 5 ms every 100 ms while receiving.
     rgb_blink_set_color(0, 0, 50);  // Active uploads always blink blue.
 
-    flash_state_partial = check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET);
-    legacy_blocked = check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET) ||
-                     v2_upload.active;
     if (v2_upload.active) {
         // A new remote command can resume the RAM bitmap after timeout or Q.
         if (v2_upload.received)
@@ -793,22 +590,6 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
         timeout = 8000000;
     }
     pogobot_timer_init(&mytimer, timeout);
-
-    if (flash_state_partial) {
-        // The address list is RAM-only; a reboot cannot safely resume a partial image.
-        if (!partial_known) {
-            printf("Partial image has no recoverable address list; erase and restart upload\n");
-            legacy_blocked = 1;
-        } else {
-            started = 1;
-            missing_total = missing_count;
-        }
-    } else {
-        partial_known = 0;
-        missing_count = 0;
-        missing_total = 0;
-        chunk_size = 0;
-    }
 
     queue_drop_start = pogobot_infrared_get_queue_drop_count();
     malformed_start = pogobot_infrared_get_malformed_count();
@@ -838,16 +619,12 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
             if (msg.header.payload_length < 4 ||
                 msg.header.payload_length > sizeof(msg.payload)) {
                 upload_stats.malformed++;
-                transfer_error = 1;
                 continue;
             }
 
             frame = (struct sfl_frame *)msg.payload;
-            if (frame->payload_length != msg.header.payload_length - 4 ||
-                (frame->cmd == SFL_CMD_JUMP && frame->payload_length != 4) ||
-                (frame->cmd == SFL_CMD_ABORT && frame->payload_length != 0)) {
+            if (frame->payload_length != msg.header.payload_length - 4) {
                 upload_stats.malformed++;
-                transfer_error = 1;
                 continue;
             }
             if (!check_crc(frame)) {
@@ -858,7 +635,6 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
                 time_reference_t process_timer;
                 uint8_t finished;
                 uint32_t process_us;
-                legacy_blocked = 1;
                 timeout = 8000000;
                 // Measure receiver work separately from the interframe wait.
                 pogobot_stopwatch_reset(&process_timer);
@@ -873,9 +649,10 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
                 }
                 // Start/erase may take time; wait for the host's preparation pause.
                 pogobot_timer_init(&mytimer, timeout);
-            } else if (!legacy_blocked && exec_frame_cmd(frame)) {
-                stopped = 1;
-                break;
+            } else {
+                // Legacy LOAD/JUMP/ABORT has no image length or final CRC.
+                // Reject it without modifying flash or the resumable v2 state.
+                upload_stats.malformed++;
             }
         }
 	}
@@ -914,10 +691,6 @@ static void ir_boot_loop_with_initial(const message_t *initial) {
                (unsigned long)(ir_uart_rx_drop_count(i) - ring_drop_start[i]));
     }
 
-    if (!flash_state_partial) {
-        missing_count = 0;
-        missing_total = 0;
-    }
     rgb_blink_set_time(5, 995);
     update_led_status();
 }
