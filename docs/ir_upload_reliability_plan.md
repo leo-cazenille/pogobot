@@ -68,6 +68,18 @@ each incomplete pass received END before the subsequent eight-second timeout.
 Host fault injection, exhaustive GF multiplication comparison, and both v3
 robot builds pass. The new decoder timing and LED behavior await robot testing.
 
+Release follow-up: require versioned IR uploads (2026-10-26). Source commit
+`7b8ee218f5d74aa81f5c07303fdddd502d12f0cb` removes the legacy IR receiver
+and remote forwarding of legacy programming frames. Serial JUMP only closes
+the remote transfer. Host tests confirm that legacy packets leave empty,
+partial, and valid flash unchanged and cannot complete or abort a v2 upload.
+The production remote also passes serial-to-IR forwarding and cancellation
+tests. The native fault suites, 18 Python upload tests, and robot, bootloader,
+and remote cross-builds pass. The installer software images are rebuilt from
+this source commit. Hardware validation of legacy-frame rejection is pending.
+The GF memory accounting is corrected: 512 bytes of lookup tables and 64 bytes
+of coefficients occupy SRAM as well as flash under the current linker.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,

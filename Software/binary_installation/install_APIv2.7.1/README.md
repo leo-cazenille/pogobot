@@ -11,6 +11,14 @@ Q to cancel an active v2 upload. The current terminal derives transfer IDs
 from the image hash, allowing another `rc_flash_robot` command to repair the
 same image without erasing verified chunks while the robot remains powered.
 
+IR programming requires versioned uploads. The robot rejects legacy
+LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
+programming frames. Use the current SDK terminal with `rc_flash_robot`.
+
+The current robot, bootloader, and remote software images were rebuilt from
+source commit `7b8ee218f5d74aa81f5c07303fdddd502d12f0cb` using the existing
+gateware.
+
 ## Contents
 
 - `bootloader/`: v3 bootloader image shared by robots and remotes.
@@ -58,7 +66,7 @@ marker contents, cleanup, and failure behavior.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-72,244-byte Pogobios at offset
+70,420-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -66,6 +74,9 @@ every active upload, including a retry, the LED blinks quickly in blue. The
 blue, orange, or green idle status blink is slow.
 Q preserves verified chunks for a later same-image retry. Reboot loses the RAM
 bitmap, and changing images forces a fresh erase. Host fault injection and
-both robot cross-builds pass. FEC decoding now drains the IR receiver between
-symbols and uses 512 bytes of read-only GF tables to reduce compute time. Its
-new timing and the corrected LED colors still need a hardware trial.
+the robot, bootloader, and remote cross-builds pass. FEC decoding drains the IR
+receiver between symbols and uses 512 bytes of GF lookup tables to reduce
+compute time. The linker copies those tables from flash into SRAM, so they
+occupy 512 bytes in each memory. The separate coefficient table uses another
+64 bytes in each. The decoder timing, LED colors, and rejection of legacy
+uploads still need a hardware trial.
