@@ -147,17 +147,18 @@ static uint8_t fec_gf_inverse(uint8_t value)
     return result;
 }
 
-static void time_erase_marker(void)
+static uint8_t time_erase_marker(void)
 {
     time_reference_t timer;
     uint32_t elapsed;
     pogobot_stopwatch_reset(&timer);
-    spiBeginErase4(FLASH_OK_OFFSET);
+    uint8_t erased = flash_invalidate_user_image();
     elapsed = pogobot_stopwatch_get_elapsed_microseconds(&timer);
     upload_stats.erase_us += elapsed;
     if (elapsed > upload_stats.erase_max_us)
         upload_stats.erase_max_us = elapsed;
     upload_stats.erases++;
+    return erased;
 }
 
 static void time_erase_sector(uint32_t addr)
@@ -382,7 +383,10 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
         }
 
         memset(&v2_upload, 0, sizeof(v2_upload));
-        time_erase_marker();
+        if (!time_erase_marker()) {
+            printf("IR v2 validity erase failed; image unchanged\n");
+            return 0;
+        }
         // Erase all image sectors before accepting DATA, including a lost first chunk.
         uint32_t first = offset / SPIFLASH_SECTOR_SIZE;
         uint32_t last = (offset + length - 1) / SPIFLASH_SECTOR_SIZE;
@@ -510,8 +514,11 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
     }
     if (v2_upload.fec_mask)
         v2_try_fec_recover();
-    if (v2_upload.complete)
-        return 1;  // Repeated END has no flash side effects.
+    if (v2_upload.complete) {
+        if (check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET))
+            return 1;  // Repeated END has no flash side effects.
+        v2_upload.complete = 0;  // Retry a damaged or missing marker below.
+    }
     if (v2_upload.failed) {
         printf("IR v2 transfer failed; the next START will erase and restart\n");
         return 1;
@@ -528,7 +535,22 @@ static uint8_t exec_v2_frame(struct sfl_frame *frame)
                (unsigned long)actual_crc, (unsigned long)v2_upload.expected_crc);
         return 1;
     }
+    // A failed marker write may have left zero bits that cannot be repaired
+    // by programming again. Erase only its sector and retain the image bitmap.
+    if (!check_flash_state(FLASH_ERASED_MARKER, FLASH_OK_OFFSET) &&
+        !check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET)) {
+        if (!time_erase_marker()) {
+            printf("IR v2 marker erase failed; END can retry\n");
+            return 0;
+        }
+        time_write(FLASH_V2_PARTIAL_OFFSET, (unsigned char *)FLASH_IS_PARTIAL,
+                   strlen(FLASH_IS_PARTIAL));
+    }
     time_write(FLASH_OK_OFFSET, (unsigned char *)FLASH_IS_OK, strlen(FLASH_IS_OK));
+    if (!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET)) {
+        printf("IR v2 marker write failed; END can retry\n");
+        return 0;
+    }
     v2_upload.complete = 1;
     printf("IR v2 image verified and complete\n");
     return 1;

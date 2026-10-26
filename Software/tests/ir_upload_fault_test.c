@@ -7,6 +7,17 @@
 
 #include "../pogolib/slip.h"
 
+#define CSR_UART_BASE 1
+#define CSR_SPIFLASH_BASE 1
+#define CONFIG_CLOCK_FREQUENCY 21000000u
+#define SRAM_BASE 0u
+#define SRAM_SIZE 0x20000u
+#define SFL_MAGIC_REQ "sL5DdSMmkekro\n"
+#define SFL_MAGIC_ACK "z6IHG7cYDID6o\n"
+#define SFL_ACK_SUCCESS 'K'
+#define SFL_ACK_CRCERROR 'C'
+#define SFL_ACK_ERROR 'E'
+#define SFL_ACK_UNKNOWN 'U'
 #define CSR_IR_TX_BASE 1
 #define CSR_IR_RX0_BASE 1
 #define IR_NUMBER 1
@@ -24,8 +35,11 @@
 #define ir_t_cmd 1
 #define ir_t_flash 2
 #define IR_UPLOAD_FLASH_READ(offset) flash_bytes[offset]
+#define POGOBIOS_FLASH_READ(offset) flash_bytes[offset]
+#define SERIAL_BOOT_RAM_WRITE(address, data, length) memcpy(ram_bytes + (address), data, length)
 
 static uint8_t flash_bytes[SPIFLASH_SIZE];
+static uint8_t ram_bytes[SRAM_SIZE];
 
 typedef struct { uint32_t hardware_value_at_time_origin; } time_reference_t;
 typedef struct {
@@ -47,7 +61,11 @@ struct sfl_frame {
 /* Minimal device interface called by the included production sources. */
 uint16_t crc16(const unsigned char *data, unsigned int length);
 uint32_t get_uint32(unsigned char *data);
-void spiBeginErase4(uint32_t address);
+int spiBeginErase4(uint32_t address);
+void spiFree(void);
+int uart_read_nonblock(void);
+char uart_read(void);
+void uart_write(char value);
 void erase_flash_sector(uint32_t address);
 void write_to_flash(uint32_t address, unsigned char *data, uint32_t length);
 uint8_t check_flash_state(const char *marker, uint32_t address);
@@ -76,6 +94,7 @@ void irq_setmask(unsigned int value);
 
 #include "../pogolib/ir_uart.c"
 #include "../pogolib/slip.c"
+#include "../pogobios/boot.c"
 #include "../pogobios/ir_boot.c"
 
 #define CHECK(condition) do { \
@@ -93,6 +112,23 @@ static unsigned int sector_erases[SPIFLASH_SIZE / SPIFLASH_SECTOR_SIZE];
 static unsigned int chunk_writes[SPIFLASH_SIZE / 64];
 static uint32_t failed_program_address = UINT32_MAX;
 static uint32_t clock_us;
+static int marker_erase_fails;
+static uint8_t serial_input[0x40000], serial_output[8192];
+static unsigned int serial_count, serial_read, serial_written;
+static int release_marker_failure_on_error;
+
+void spiFree(void) {}
+int uart_read_nonblock(void) { return serial_read < serial_count; }
+char uart_read(void) { assert(serial_read < serial_count); return serial_input[serial_read++]; }
+void uart_write(char value)
+{
+    assert(serial_written < sizeof(serial_output));
+    serial_output[serial_written++] = value;
+    if (value == SFL_ACK_ERROR && release_marker_failure_on_error) {
+        failed_program_address = UINT32_MAX;
+        release_marker_failure_on_error = 0;
+    }
+}
 static uint8_t hardware_fifo[700];
 static unsigned int hardware_count, hardware_read;
 static uint8_t encoded[128];
@@ -110,16 +146,12 @@ uint16_t crc16(const unsigned char *data, unsigned int length)
     return crc;
 }
 
-uint32_t get_uint32(unsigned char *data)
-{
-    return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
-           ((uint32_t)data[2] << 8) | data[3];
-}
-
-void spiBeginErase4(uint32_t address)
+int spiBeginErase4(uint32_t address)
 {
     CHECK(address + 4096 <= SPIFLASH_SIZE);
-    memset(&flash_bytes[address], 0xff, 4096);
+    if (!marker_erase_fails)
+        memset(&flash_bytes[address], 0xff, 4096);
+    return 0;
 }
 
 void erase_flash_sector(uint32_t address)
@@ -140,11 +172,6 @@ void write_to_flash(uint32_t address, unsigned char *data, uint32_t length)
         chunk_writes[address / 64]++;
 }
 
-uint8_t check_flash_state(const char *marker, uint32_t address)
-{
-    return memcmp(&flash_bytes[address], marker, strlen(marker)) == 0;
-}
-
 void pogobot_stopwatch_reset(time_reference_t *timer) { timer->hardware_value_at_time_origin = clock_us; }
 uint32_t pogobot_stopwatch_get_elapsed_microseconds(time_reference_t *timer)
 { return clock_us - timer->hardware_value_at_time_origin; }
@@ -161,16 +188,6 @@ void rgb_blink(void)
     // Any active packet-processing interval must keep the fast blink blue.
     if (blink_fast && (led_r != 0 || led_g != 0 || led_b != 50))
         abort();
-}
-void update_led_status(void)
-{
-    if (check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET))
-        rgb_blink_set_color(0, 40, 0);
-    else if (check_flash_state(FLASH_IS_PARTIAL, FLASH_OK_OFFSET) ||
-             check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET))
-        rgb_blink_set_color(40, 15, 0);
-    else
-        rgb_blink_set_color(0, 0, 40);
 }
 void pogobot_infrared_update(void) {}
 int pogobot_infrared_message_available(void)
@@ -235,6 +252,9 @@ static void reset_device(void)
     message_release_us = 0;
     clock_us = 0;
     failed_program_address = UINT32_MAX;
+    marker_erase_fails = release_marker_failure_on_error = 0;
+    serial_count = serial_read = serial_written = 0;
+    memset(ram_bytes, 0, sizeof(ram_bytes));
     memset(&v2_upload, 0, sizeof(v2_upload));
     led_r = led_g = led_b = blink_fast = 0;
     ir_uart_init();
@@ -464,6 +484,260 @@ static void test_legacy_ir_cannot_complete_or_abort_v2(void)
     CHECK(upload_stats.accepted == 1 && upload_stats.erases == 0);
     CHECK(v2_upload.received == 3 && v2_upload.complete);
     CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void reset_serial(void)
+{
+    serial_count = strlen(SFL_MAGIC_ACK);
+    memcpy(serial_input, SFL_MAGIC_ACK, serial_count);
+    serial_read = serial_written = 0;
+}
+
+static void append_serial_packet(uint8_t command, const uint8_t *payload, uint8_t length)
+{
+    struct sfl_frame frame = {0};
+    CHECK(serial_count + length + 4u <= sizeof(serial_input));
+    frame.payload_length = length;
+    frame.cmd = command;
+    if (length)
+        memcpy(frame.payload, payload, length);
+    uint16_t crc = crc16(&frame.cmd, length + 1u);
+    frame.crc[0] = crc >> 8;
+    frame.crc[1] = crc;
+    memcpy(serial_input + serial_count, &frame, length + 4u);
+    serial_count += length + 4u;
+}
+
+static void append_serial_load(uint32_t address, unsigned int length)
+{
+    uint8_t payload[255];
+    CHECK(length && length <= sizeof(payload) - 4);
+    put_u32(payload, address);
+    memset(payload + 4, 0x5a, length);
+    append_serial_packet(SFL_CMD_LOAD, payload, length + 4);
+}
+
+static void append_serial_jump(void)
+{
+    uint8_t address[4];
+    put_u32(address, SPIFLASH_BASE + 0x60000u);
+    append_serial_packet(SFL_CMD_JUMP, address, sizeof(address));
+}
+
+static void test_serial_empty_and_invalid_frames(void)
+{
+    reset_device();
+    reset_serial();
+    append_serial_packet(SFL_CMD_ABORT, NULL, 0);
+    memset(serial_input + serial_count, 0x55, 300);
+    serial_count += 300;
+    CHECK(serialboot() == 1);
+    CHECK(serial_read == strlen(SFL_MAGIC_ACK) + 4);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    reset_device();
+    reset_serial();
+    uint8_t payload[255] = {0};
+    for (unsigned int length = 0; length <= 4; length++)
+        append_serial_packet(SFL_CMD_LOAD, payload, length);
+    append_serial_packet(SFL_CMD_JUMP, payload, 3);
+    append_serial_packet(SFL_CMD_ABORT, payload, 1);
+    append_serial_packet(0x7f, payload, 255);
+    append_serial_packet(SFL_CMD_ABORT, NULL, 0);
+    CHECK(serialboot() == 1);
+    CHECK(serial_output[serial_written - 9] == SFL_ACK_ERROR);
+    CHECK(serial_output[serial_written - 2] == SFL_ACK_UNKNOWN);
+    CHECK(serial_output[serial_written - 1] == SFL_ACK_SUCCESS);
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 0);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void test_serial_partial_frame_timeout_and_crc_retry(void)
+{
+    reset_device();
+    serial_input[0] = 255;
+    serial_input[1] = 0;
+    serial_count = 2;
+    struct sfl_frame frame;
+    CHECK(!receive_sfl_frame(&frame));
+    append_serial_packet(SFL_CMD_ABORT, NULL, 0);
+    CHECK(receive_sfl_frame(&frame));
+    CHECK(frame.cmd == SFL_CMD_ABORT && frame.payload_length == 0);
+
+    reset_device();
+    reset_serial();
+    append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+    serial_input[serial_count - 1] ^= 1;
+    append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+    append_serial_jump();
+    CHECK(serialboot() == 0);
+    CHECK(serial_output[serial_written - 3] == SFL_ACK_CRCERROR);
+    CHECK(serial_output[serial_written - 2] == SFL_ACK_SUCCESS);
+    CHECK(serial_output[serial_written - 1] == SFL_ACK_SUCCESS);
+    CHECK(chunk_writes[0x60000u / 64u] == 1);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+}
+
+static void test_serial_bounds_and_marker_lifecycle(void)
+{
+    reset_device();
+    reset_serial();
+    append_serial_load(SPIFLASH_BASE + SPIFLASH_SIZE - 16, 64);
+    append_serial_load(SRAM_SIZE - 8, 16);
+    append_serial_load(UINT32_MAX - 16, 64);
+    append_serial_load(SRAM_BASE, 16);
+    append_serial_jump();
+    CHECK(serialboot() == 0);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    for (unsigned int i = 0; i < 16; i++) CHECK(ram_bytes[i] == 0x5a);
+    CHECK(sector_erases[(SPIFLASH_SIZE - 1) / SPIFLASH_SECTOR_SIZE] == 0);
+
+    // Interrupt a replacement upload, then try JUMP in a fresh session.
+    reset_device();
+    memcpy(flash_bytes + FLASH_OK_OFFSET, FLASH_IS_OK, strlen(FLASH_IS_OK));
+    reset_serial();
+    append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+    append_serial_packet(SFL_CMD_ABORT, NULL, 0);
+    CHECK(serialboot() == 1);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(check_flash_state(FLASH_IS_PARTIAL, FLASH_V2_PARTIAL_OFFSET));
+    reset_serial();
+    append_serial_jump();
+    CHECK(serialboot() == 0);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    // An erase failure must preserve the old valid image's bytes.
+    reset_device();
+    memset(flash_bytes + 0x60000u, 0xa5, 64);
+    memcpy(flash_bytes + FLASH_OK_OFFSET, FLASH_IS_OK, strlen(FLASH_IS_OK));
+    marker_erase_fails = 1;
+    reset_serial();
+    append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+    append_serial_packet(SFL_CMD_ABORT, NULL, 0);
+    CHECK(serialboot() == 1);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(flash_bytes[0x60000u] == 0xa5);
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 0);
+}
+
+static void test_serial_rejected_writes_cannot_finalize(void)
+{
+    for (unsigned int readback_failure = 0; readback_failure < 2; readback_failure++) {
+        reset_device();
+        if (readback_failure)
+            failed_program_address = 0x60000u;
+        reset_serial();
+        append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+        if (!readback_failure)
+            append_serial_load(UINT32_MAX - 16, 64);
+        append_serial_jump();
+        append_serial_packet(SFL_CMD_ABORT, NULL, 0);
+        CHECK(serialboot() == 1);
+        CHECK(serial_output[serial_written - 2] == SFL_ACK_ERROR);
+        CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    }
+}
+
+static void test_serial_invalidates_ir_cache(void)
+{
+    const uint32_t id = 0x99887766u, length = 65;
+    reset_device();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.complete);
+
+    reset_serial();
+    append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+    append_serial_load(SPIFLASH_BASE + 0x60040u, 1);
+    append_serial_jump();
+    CHECK(serialboot() == 0);
+    CHECK(!v2_upload.active && !v2_upload.complete);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(flash_bytes[0x60000u] == 0x5a);
+
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.complete && upload_stats.accepted == 2);
+    CHECK(v2_flash_crc32(0x60000u, length) == generated_image_crc(length));
+}
+
+static void test_serial_cross_sector_and_marker_retry(void)
+{
+    reset_device();
+    memset(flash_bytes + 0x70000u, 0, SPIFLASH_SECTOR_SIZE);
+    reset_serial();
+    for (unsigned int offset = 0; offset < 0xffc0u; offset += 64)
+        append_serial_load(SPIFLASH_BASE + 0x60000u + offset, 64);
+    append_serial_load(SPIFLASH_BASE + 0x6ffc0u, 128);
+    append_serial_jump();
+    CHECK(serialboot() == 0);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+    CHECK(sector_erases[0x70000u / SPIFLASH_SECTOR_SIZE] == 1);
+    for (unsigned int i = 0; i < 128; i++)
+        CHECK(flash_bytes[0x6ffc0u + i] == 0x5a);
+
+    reset_device();
+    failed_program_address = FLASH_OK_OFFSET;
+    release_marker_failure_on_error = 1;
+    reset_serial();
+    append_serial_load(SPIFLASH_BASE + 0x60000u, 64);
+    append_serial_jump();
+    append_serial_jump();
+    CHECK(serialboot() == 0);
+    CHECK(serial_output[serial_written - 2] == SFL_ACK_ERROR);
+    CHECK(serial_output[serial_written - 1] == SFL_ACK_SUCCESS);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+}
+
+static void test_ir_marker_failures_are_retryable(void)
+{
+    const uint32_t id = 0x19283746u, length = 65;
+    reset_device();
+    failed_program_address = FLASH_OK_OFFSET;
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_data(id, 0, length);
+    append_v2_data(id, 1, length);
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.received == 2 && !v2_upload.complete && !v2_upload.failed);
+    CHECK(!check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    failed_program_address = UINT32_MAX;
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.complete && upload_stats.accepted == 0);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 1);
+
+    // Extra zero bits in a marker also need erasure, not repeated programming.
+    flash_bytes[FLASH_OK_OFFSET] = 0;
+    reset_messages();
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    append_v2_end(id);
+    ir_boot_loop();
+    CHECK(v2_upload.complete && upload_stats.accepted == 0);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+
+    reset_device();
+    memcpy(flash_bytes + FLASH_OK_OFFSET, FLASH_IS_OK, strlen(FLASH_IS_OK));
+    memset(flash_bytes + 0x60000u, 0xa5, 64);
+    marker_erase_fails = 1;
+    append_v2_start(id, SPIFLASH_BASE + 0x60000u, length, generated_image_crc(length));
+    ir_boot_loop();
+    CHECK(!v2_upload.active && flash_bytes[0x60000u] == 0xa5);
+    CHECK(check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    CHECK(sector_erases[0x60000u / SPIFLASH_SECTOR_SIZE] == 0);
 }
 
 static void test_v2_start_enters_from_pogobios(void)
@@ -888,6 +1162,13 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 9);
     test_fec_gf_tables();
+    test_serial_empty_and_invalid_frames();
+    test_serial_partial_frame_timeout_and_crc_retry();
+    test_serial_bounds_and_marker_lifecycle();
+    test_serial_rejected_writes_cannot_finalize();
+    test_serial_invalidates_ir_cache();
+    test_serial_cross_sector_and_marker_retry();
+    test_ir_marker_failures_are_retryable();
     test_legacy_ir_cannot_modify_flash();
     test_legacy_ir_cannot_complete_or_abort_v2();
     test_uart_full_ring();

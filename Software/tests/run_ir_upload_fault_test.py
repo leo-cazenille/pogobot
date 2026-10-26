@@ -127,7 +127,7 @@ def main():
         subprocess.run(
             [
                 "cc", "-std=c11", "-O1", "-g", "-Wall", "-Wextra",
-                "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer",
                 "-I", str(temp_dir),
                 "-I", str(TEST_DIR.parent / "pogobios"),
                 "-I", str(TEST_DIR.parent / "pogolib"),
@@ -145,7 +145,7 @@ def main():
         remote_executable = temp_dir / "ir_remote_upload_test"
         subprocess.run([
             "cc", "-std=c11", "-O1", "-g", "-Wall", "-Wextra",
-            "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+            "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer",
             "-I", str(temp_dir), "-I", str(TEST_DIR.parent / "pogobios"),
             str(TEST_DIR / "ir_remote_upload_test.c"), "-o", str(remote_executable),
         ], check=True)

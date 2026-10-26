@@ -211,7 +211,10 @@ static void erase_userprog_handler(int nb_params, char **params) {
         // Enable memory-mapped mode
         spiFree();
         //erase a part of the "flash is ok" token
-        spiBeginErase4(FLASH_OK_OFFSET);
+        if (!flash_invalidate_user_image()) {
+            printf("User program validity erase failed\n");
+            return;
+        }
         //erase the begining of the user code
         spiBeginErase64(0x60000);
 

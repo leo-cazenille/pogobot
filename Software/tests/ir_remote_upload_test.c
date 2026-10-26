@@ -59,6 +59,8 @@ static int pogobot_timer_has_expired(time_reference_t *timer)
 { return ++clock_us >= timer->deadline; }
 static void msleep(int milliseconds) { clock_us += (uint32_t)milliseconds * 1000u; }
 static void spiFree(void) {}
+static int spiBeginErase4(uint32_t address)
+{ (void)address; assert(!"remote test must not erase local flash"); return 0; }
 static void rgb_blink_set_color(int r, int g, int b) { (void)r; (void)g; (void)b; }
 static uint16_t pogobot_helper_getid(void) { return 0x1234; }
 static uint8_t pogobot_infrared_emitting_power_list(int a, int b, int c, int d)
@@ -103,6 +105,19 @@ static void append_serial_frame(uint8_t command, unsigned int length)
 
 int main(void)
 {
+    // Empty legacy frames and maximum-size unknown frames must not consume
+    // bytes from the next frame or overrun the serial frame buffer.
+    reset_serial();
+    append_serial_frame(SFL_CMD_ABORT, 0);
+    append_serial_frame(0x7f, 255);
+    append_serial_frame(SFL_CMD_JUMP, 3);
+    append_serial_frame(SFL_CMD_JUMP, 4);
+    assert(flash_robot() == 0 && forwarded_count == 0);
+    assert(serial_output[output_count - 4] == SFL_ACK_UNKNOWN);
+    assert(serial_output[output_count - 3] == SFL_ACK_UNKNOWN);
+    assert(serial_output[output_count - 2] == SFL_ACK_ERROR);
+    assert(serial_output[output_count - 1] == SFL_ACK_SUCCESS);
+
     reset_serial();
     append_serial_frame(SFL_CMD_LOAD, 68);
     append_serial_frame(SFL_CMD_JUMP, 4);

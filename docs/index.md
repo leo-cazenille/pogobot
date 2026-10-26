@@ -6,6 +6,9 @@
   survey and review items from the 2026-09-14 checkout.
 - [IR upload reliability plan](ir_upload_reliability_plan.md): phased changes
   for robust firmware uploads through the Pogowall or Pogoshower.
+- Host checks: [upload fault injection](../Software/tests/run_ir_upload_fault_test.py)
+  and [library API fault injection](../Software/tests/run_api_fault_test.py)
+  compile production C sources with address and undefined-behavior sanitizers.
 - [Project README](../README.md) and [hardware guide](../Hardware/readme.md):
   robot overview, schematics, parts, and accessories.
 - [Expert software guide](../Software/readme.md), [SDK guide](../Software/sdk/Readme.md),

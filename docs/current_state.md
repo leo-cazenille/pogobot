@@ -20,6 +20,8 @@ snapshot, including local changes.
   a firmware self-integrity test.
 - The user flash page API, raw SPI addressing, v2/v3 flash capacities, and
   boot-image and validity-marker allocations.
+- Cable loading and IR retry-state interactions, marker write/erase failures,
+  IR send bounds and FIFO backpressure, security-register writes, and timers.
 
 ## Understood
 
@@ -160,10 +162,25 @@ empty, orange for partial, and green for verified. Host fault injection and
 both v3 robot cross-builds pass. The rebuilt bootloader embeds the new receiver.
 Decoder timing and LED colors for this build still need a robot trial.
 
-The release review also reproduced serial-frame and public IR-send buffer
-overflows, stale cable/IR validity state, unchecked validity-marker writes,
-TX FIFO drops, a 256-byte security-register write loop, and incorrect signed
-timer conversions. Those findings remain open release work.
+The eight release-review findings are implemented without public API changes.
+IR send wrappers reject oversized data before copying. Cable and remote
+uploads share bounded frame reception, including empty frames. Cable loading
+checks destinations, invalidates application markers before writing, resets
+cached IR progress, and reads writes back. Incomplete cable sessions cannot
+be finalized by JUMP in a later session. Marker erasure and final writes are
+verified; an IR END can retry marker finalization without erasing image data.
+TX FIFO space is checked per byte. Security-register bounds avoid overflow,
+and the write counter supports 256 bytes. Timer conversions use signed integer
+arithmetic. The SPI byte sender also preserves hardware reads without its
+previous unused, uninitialized shift accumulator.
+
+Native sanitizer tests exercise the production serial loader and IR receiver
+together, including cable replacement of a completed IR image, marker failures,
+timeouts, and sector-spanning frames. The library API suite covers maximum
+IR payloads, FIFO backpressure, full security-register writes, negative timer
+values, and counter wraparound. Target builds and hardware validation are
+tracked separately in the IR plan and installer notes. Applications must be
+rebuilt against the updated static SDK library to receive the library fixes.
 
 ## Current decisions
 

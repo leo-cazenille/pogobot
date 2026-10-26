@@ -241,6 +241,9 @@ pogobot_infrared_sendLongMessage_uniSpe( ir_direction dir,
                                          uint8_t *message,
                                          uint16_t message_size )
 {
+    // Reject oversized payloads before copying into the stack message.
+    if (message_size > MAX_PAYLOAD_SIZE_BYTES)
+        return 1;
 
     message_t m;
     m.header._emitting_power_list =
@@ -256,6 +259,8 @@ uint32_t
 pogobot_infrared_sendLongMessage_omniGen( uint8_t *message,
                                           uint16_t message_size )
 {
+    if (message_size > MAX_PAYLOAD_SIZE_BYTES)
+        return 1;
 
     message_t m;
     m.header._emitting_power_list =
@@ -271,6 +276,8 @@ uint32_t
 pogobot_infrared_sendLongMessage_omniSpe( uint8_t *message,
                                           uint16_t message_size )
 {
+    if (message_size > MAX_PAYLOAD_SIZE_BYTES)
+        return 1;
 
     int i = 0;
     int error = 0;
@@ -294,6 +301,8 @@ pogobot_infrared_sendShortMessage_uni( ir_direction dir,
                                        uint8_t *message,
                                        uint16_t message_size )
 {
+    if (message_size > MAX_PAYLOAD_SIZE_BYTES)
+        return 1;
 
     short_message_t m;
     m.header.payload_length = message_size;
@@ -306,6 +315,8 @@ uint32_t
 pogobot_infrared_sendShortMessage_omni( uint8_t *message,
                                         uint16_t message_size )
 {
+    if (message_size > MAX_PAYLOAD_SIZE_BYTES)
+        return 1;
 
     short_message_t m;
     m.header.payload_length = message_size;
@@ -344,9 +355,10 @@ write_byte_via_a_four_byte_word_channel( uint8_t byte )
         // time, less access to wishbone, better performance.
         //ir_tx_tx_write( send );
         
-        while( ir_tx_txfull_read() == 1 );  // Wait until FIFO is not full
         for(int i=0; i<sizeof(uint32_t); i++)
         {
+            // One free FIFO slot permits one byte, not the whole four-byte batch.
+            while (ir_tx_txfull_read() == 1);
             ir_tx_tx_write(((uint8_t *)&send)[i]);     // Direct
         }
         ir_tx_conf_tx_trig_write(1);
