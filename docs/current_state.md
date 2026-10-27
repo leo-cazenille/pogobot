@@ -1,6 +1,6 @@
 # Current repository state
 
-Updated: 2026-10-26. Branch: `optimized_remote_transfer`; this is a working-tree
+Updated: 2026-10-27. Branch: `optimized_remote_transfer`; this is a working-tree
 snapshot, including local changes.
 
 ## Inspected
@@ -22,6 +22,8 @@ snapshot, including local changes.
   boot-image and validity-marker allocations.
 - Cable loading and IR retry-state interactions, marker write/erase failures,
   IR send bounds and FIFO backpressure, security-register writes, and timers.
+- Pogobios size attribution, LTO and section collection, command retention,
+  and application linking against the full fat-object library archive.
 
 ## Understood
 
@@ -187,6 +189,21 @@ same 163 exported symbols. The standalone SDK branch `sdk_2_7_1` is refreshed
 at `d61344d`; its integrity example's SDK path is corrected. Native sanitizer
 tests and 18 Python upload tests pass. Hardware validation is pending.
 
+The Pogobios and pogolib Makefiles now enable `-flto`, function/data sections,
+and the existing linker section collection. Fat library objects preserve native
+code for non-LTO applications; the compiler's archiver indexes the LTO symbols.
+Robot and bootloader binaries shrink from 71,180 to 62,228 bytes (12.6%);
+the remote shrinks from 67,828 to 51,052 bytes (24.7%). Robot static SRAM use
+falls from 85,184 to 76,224 bytes, leaving 54,848 bytes for stack/runtime use.
+A section-only control (`LTO=0`) is 67,740 bytes. Changing LTO mode requires
+a clean rebuild or `make -B`. All 56 robot/57 remote commands and all 163
+library exports remain. Sanitizer suites pass with and without LTO; all 18
+Python tests pass in Apptainer. Flash-page applications link normally and with
+`-fno-lto`; the integrity example builds and seals. These are software checks:
+peak stack use and hardware behavior remain unmeasured. Installer binaries,
+combined boot images, SDK packages, and the standalone SDK are not refreshed
+by this build-only comparison.
+
 ## Current decisions
 
 - Measure coded and uncoded timing and completion on hardware before changing
@@ -231,3 +248,5 @@ decoder and LED changes still need a hardware trial.
    results for pages 0, 255, 256, 1791, 1792, and 5887.
 5. Program one test robot and each remote type from the API v2.7.1 package,
    then verify the reported version and repeat the upload and flash tests.
+6. Validate LTO firmware on hardware, including console commands, sensor/SPI
+   access, and IR upload timing, before refreshing release packages.
