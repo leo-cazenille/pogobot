@@ -16,10 +16,11 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `097dd13d020d269c6155ca57185aa5990d6e569a` using the existing
-gateware. LTO, function/data sections, and linker garbage collection reduce
-robot and bootloader Pogobios to 62,228 bytes and remote Pogobios to 51,052
-bytes. All 56 robot and 57 remote console commands remain.
+source commit `4aee02661ca595080b1c39a37dbad294b41f546e` using the existing
+gateware. LTO, function/data sections, and linker garbage collection keep
+robot and bootloader Pogobios at 86,732 bytes and remote Pogobios at 75,572
+bytes, including PFFS v4. All previous commands remain, plus 18 filesystem and
+UART protocol handlers (74 robot and 75 remote commands in total).
 
 This build fixes the eight release-review findings while preserving the public
 C API. Serial frames and IR payloads are checked before copying. Application
@@ -28,6 +29,17 @@ marker writes are verified before success is reported. IR finalization can be
 retried after a marker failure while retaining image data. The library also
 fixes FIFO backpressure, full security-register writes, and signed timer
 conversions. Rebuild user applications with the refreshed SDK library.
+
+PFFS commands are available directly at the BIOS prompt. Type `pffs` for help
+or `ls` to inspect files without changing flash. File creation refuses absent
+or corrupt catalogs; `format YES` is the explicit operation that deletes all
+PFFS files. The existing v4 layout and user-flash region are unchanged.
+See [PFFS file commands](../../readme.md#pffs-file-commands) and the
+[UART transfer tool](../../pffs_transfer.py). These commands act on the
+UART-connected device; a Pogoshower connection manages the controller's files,
+not files on robots over IR. During a file transfer or defrag, other commands
+and IR upload entry are blocked. Inactive UART sessions time out after 30
+seconds; defrag runs until completion or a reported error.
 
 ## Contents
 
@@ -83,7 +95,7 @@ file paths, offsets, marker contents, cleanup, and programmer-failure handling.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-62,228-byte Pogobios at offset
+86,732-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -110,3 +122,11 @@ application using flash-page APIs omitted from Pogobios links against the full
 library archive, both normally and with `-fno-lto`. The integrity example builds
 and seals with that archive. Booting, SPI/sensor access, and IR upload timing
 with these optimized installer images still need hardware validation.
+
+The PFFS NOR file/log tests, full and minimal BIOS console integration tests,
+and all 19 host-client transfer tests pass with LTO and fatal sanitizers. They
+cover CRC faults, retries, interrupted writes, malformed/overlong commands,
+partial-input timeouts and file-session isolation. The 163 library exports
+are preserved; filesystem support is private to the BIOS. The earlier LTO
+installer worked on one user-tested robot. PFFS hardware operations and
+persistence across reboot and firmware upload still need robot validation.

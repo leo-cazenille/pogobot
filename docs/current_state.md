@@ -202,8 +202,8 @@ a clean rebuild or `make -B`. All 56 robot/57 remote commands and all 163
 library exports remain. Sanitizer suites pass with and without LTO; all 18
 Python tests pass in Apptainer. Flash-page applications link normally and with
 `-fno-lto`; the integrity example builds and seals. These are software checks:
-peak stack use and hardware behavior remain unmeasured. The API v2.7.1
-installer is now refreshed from source commit `097dd13`, including the combined
+peak stack use and hardware behavior remain unmeasured. The LTO-only API v2.7.1
+installer was refreshed from source commit `097dd13`, including the combined
 bootloader with the 62,228-byte firmware at offset `0x20000`. All seven package
 checksums, slot bounds, embedded bytes, and simulated programmer success/failure
 checks pass. SDK packages and the standalone SDK remain unchanged and compatible.
@@ -222,6 +222,9 @@ validation, including persistence across reboot and firmware upload.
 Robot/bootloader binaries are 86,732 bytes with 74 commands; the remote
 is 75,572 bytes with 75 commands. Robot static SRAM use is 103,240 bytes,
 leaving 27,832 bytes for stack/runtime work.
+The API v2.7.1 installer now packages this PFFS build from source commit
+`4aee02661ca595080b1c39a37dbad294b41f546e`. Package checksums, slot bounds,
+bootloader embedding and simulated programmer success/failure checks pass.
 
 ## Current decisions
 

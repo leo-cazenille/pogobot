@@ -105,6 +105,15 @@ embedded firmware identity, and simulated installer success/failure tests pass.
 IR phase implementation hashes above are unchanged; hardware validation of
 these optimized images remains pending. The separate SDK archive is unchanged.
 
+PFFS integration follow-up: source commit
+`4aee02661ca595080b1c39a37dbad294b41f546e` adds private BIOS filesystem
+commands and PFT1 UART file transfers. The installer contains the rebuilt
+robot, remote and embedded bootloader images. The firmware upload wire format
+and IR phase hashes above are unchanged. Active file transfers and defrag
+serialize flash access and defer IR upload entry; retry firmware uploads after
+those operations finish. NOR, console and all 19 file-transfer host tests pass.
+PFFS hardware operations and IR timing with these images await robot testing.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,
