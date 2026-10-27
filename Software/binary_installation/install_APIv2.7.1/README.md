@@ -16,11 +16,12 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `c237ffd8611059a1b02b198482553d423dd8725f` using the existing
+source commit `cdf3bd7cb73669dd5f2769b2e3f5f33626ba8f50` using the existing
 gateware. LTO, function/data sections, and linker garbage collection keep
-robot and bootloader Pogobios at 88,100 bytes and remote Pogobios at 75,572
-bytes, including PFFS v4. Robot BIOS adds 19 filesystem/UART handlers; remote
-BIOS has 18. Each has 75 commands in total. The new `load` command is robot-only.
+robot and bootloader Pogobios at 94,580 bytes and remote Pogobios at 79,068
+bytes, including PFFS v4 and IR file transfer. Robot BIOS has 77 commands
+(including 21 filesystem/transfer handlers); remote BIOS has 76 (19 such
+handlers). The `load` and `ir_file_abort` commands are robot-only.
 
 This build fixes the eight release-review findings while preserving the public
 C API. Serial frames and IR payloads are checked before copying. Application
@@ -35,10 +36,10 @@ or `ls` to inspect files without changing flash. File creation refuses absent
 or corrupt catalogs; `format YES` is the explicit operation that deletes all
 PFFS files. The existing v4 layout and user-flash region are unchanged.
 See [PFFS file commands](../../readme.md#pffs-file-commands) and the
-[UART transfer tool](../../pffs_transfer.py). These commands act on the
-UART-connected device; a Pogoshower connection manages the controller's files,
-not files on robots over IR. During a file transfer or defrag, other commands
-and IR upload entry are blocked. Inactive UART sessions time out after 30
+[UART transfer tool](../../pffs_transfer.py). UART file commands act on the connected device; on a Pogoshower they manage
+the controller's files. Use `rc_send_file` below to broadcast a saved file to
+robots. During a UART file transfer or defrag, other commands and IR upload
+entry are blocked. Inactive UART sessions time out after 30
 seconds; defrag runs until completion or a reported error.
 
 The robot-only command `load <id|name>` installs a raw SDK `firmware.bin`
@@ -49,8 +50,33 @@ the whole installed CRC gate the completion marker. Files must be 4..131072
 bytes; ELF, PFT1 envelopes and logs are refused. No gateware, bootloader or PFFS
 sectors are erased. An interrupted installation can be retried from `Pogoboot>`.
 The loader adds 1,368 bytes to robot firmware and reuses the shared page cache.
-Robot static SRAM is 104,608 bytes, leaving a 26,464-byte stack/runtime gap.
-The shared SDK API and the existing SDK package are unchanged by this command.
+With IR file support included, robot static SRAM is 113,984 bytes, leaving
+a 17,088-byte stack/runtime gap. Peak stack use still needs hardware measurement.
+The shared public SDK API is unchanged.
+
+## Broadcast a saved file over IR
+
+At a robot BIOS prompt, use `ir_send_file <id|name> [passes] [--replace]`.
+At a remote prompt, use `rc_send_file <id|name> [passes] [--replace]`.
+For example, `rc_send_file controller 3 --replace` broadcasts the named file
+three times with 16+4 parity. Q or ESC stops the sender. Both sender and
+receivers need this BIOS; receiving robots must be idle at their BIOS prompt.
+See [IR file broadcasts](../../readme.md#broadcast-a-saved-file-over-ir).
+
+The source must be a named ordinary file. Receivers choose a free local ID
+and retain its name, format and exact byte length. A conflicting name is
+refused unless `--replace` is present. Replacement preserves the destination
+ID and requires the same format and allocated page count. It happens in place;
+interruption can leave the old file damaged. Verified identical files are
+skipped. New files are published only after readback and CRC verification.
+
+A matching broadcast can repair partial data while the receiver remains powered.
+Pending reception reserves its flash extent and locks filesystem operations
+across timeout or cancellation; `ir_file_abort` at that robot's UART prompt
+releases it. Reboot loses unpublished progress. Files are never automatically
+loaded or run, and firmware slots and validity markers are untouched. There
+are no receiver acknowledgements or automatic relaying. Receivers must have a
+valid PFFS catalog; IR reception never formats storage.
 
 ## Contents
 
@@ -64,7 +90,7 @@ The matching SDK is packaged separately as `../sdk_APIv2.7.1.tar.gz`, with its
 own `../sdk_APIv2.7.1.tar.gz.sha256` checksum file. The refreshed SDK includes
 PFFS v4 file/log declarations, the complete implementation in `libpogobot.a`,
 portable `src/pffs` sources for native builds, and the UART transfer client.
-The matching standalone SDK commit is `cdaf6b0` (`sdk_2_7_1`); pogo-utils
+The matching standalone SDK commit is `39c22e88951f03c75eac32622b26838f25e3b850` (`sdk_2_7_1`); pogo-utils
 uses it from commit `1cc1d26` (`dev`).
 
 ## Program a device
@@ -109,7 +135,7 @@ file paths, offsets, marker contents, cleanup, and programmer-failure handling.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-88,100-byte Pogobios at offset
+94,580-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -141,7 +167,7 @@ The PFFS NOR file/log tests, full and minimal BIOS console integration tests,
 and all 19 host-client transfer tests pass with LTO and fatal sanitizers. They
 cover CRC faults, retries, interrupted writes, malformed/overlong commands,
 partial-input timeouts and file-session isolation. The 163 prior library exports
-are preserved; the archive now has 206 symbols, including all 35 public PFFS
+are preserved; the archive now has 208 symbols, including all 35 public PFFS
 file/log functions. Pogobios and applications link the same maintained pogolib
 core. Existing pogo-utils headers forward to the SDK declarations, and native
 pogo-utils builds compile the SDK sources with its explicit simulator backend.
@@ -155,3 +181,12 @@ ASan/UBSan and LTO. They cover source/catalog CRC failure, bounds up to 128 KiB,
 partial pages, UART/transfer isolation, protected flash regions, failed erases,
 page/marker writes, source changes, late corruption and successful retry. Launch
 and persistence on a real robot remain unvalidated.
+
+IR file sender/receiver tests pass with LTO and fatal ASan/UBSan. They cover
+empty files through the full 1,408 KiB data capacity, interleaved 16+4 recovery,
+repeated-pass repair, metadata/source validation, reserved-extent isolation,
+reboot/abort behavior, default conflicts and explicit replacement. Injected
+erase, write, CRC and catalog-publication failures preserve the documented
+locking and publication rules. All 16 pogo-utils host tests pass against the
+refreshed portable SDK core. File-radio timing, range, replacement behavior and
+peak stack use remain unvalidated on hardware.

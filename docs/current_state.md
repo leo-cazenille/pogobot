@@ -269,10 +269,18 @@ source binding, abort/reboot, default conflicts, replacement, failed erase/write
 publish, CRC faults and malformed packets. Existing firmware upload, remote and
 full/minimal PFFS/console tests pass. Serial/radio timing and runtime stack peaks
 remain unmeasured; all device behavior still needs hardware validation.
-The robot build is 94,588 bytes (3,716 bytes left in its 96 KiB slot), static
-SRAM is 113,992 bytes and the stack/runtime gap is 17,080 bytes. Remote firmware
-is 79,164 bytes with 92,680 bytes static SRAM and a 38,392-byte runtime gap.
+The robot build is 94,580 bytes (3,724 bytes left in its 96 KiB slot), static
+SRAM is 113,984 bytes and the stack/runtime gap is 17,088 bytes. Remote firmware
+is 79,068 bytes with 92,584 bytes static SRAM and a 38,488-byte runtime gap.
 Both builds use LTO. All 18 existing PC uploader tests and API fault checks pass.
+Final release source is `cdf3bd7cb73669dd5f2769b2e3f5f33626ba8f50`; standalone
+SDK `39c22e8` includes the matching private indexed helpers and library (208
+exports; all 163 prior symbols preserved). Normal, bootloader and remote builds,
+all 32 examples from a fresh SDK archive, default/non-LTO PFFS API linking,
+C++ headers and all 16 pogo-utils host tests pass. Installer checksums, firmware
+slot bounds, bootloader embedding and mock programmer paths pass. The v2.7.1
+installer and separate SDK archive are refreshed. File-radio hardware validation
+and peak stack measurement remain pending.
 
 ## Current decisions
 

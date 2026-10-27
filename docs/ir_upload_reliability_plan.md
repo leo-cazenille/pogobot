@@ -129,6 +129,19 @@ same invalid/partial/verified marker policy. The installer is refreshed with
 format are unchanged. Controller loading and IR timing still need hardware
 validation; native controller fault injection passes.
 
+IR file broadcast follow-up: core commit `30fff17`, with final release source
+`cdf3bd7cb73669dd5f2769b2e3f5f33626ba8f50`, adds robot `ir_send_file` and remote
+`rc_send_file`, optional passes and explicit same-allocation `--replace`.
+Files use a separate user-packet command range, the shared 16+4 decoder and a
+reserved, unpublished PFFS extent. No acknowledgements, automatic forwarding or
+controller installation are added. Pending reception holds PFFS across timeout;
+matching broadcasts repair it, and UART `ir_file_abort` releases it. Preparation
+keepalives are drained between verified 4 KiB erases. Native LTO/fatal-sanitizer
+file tests include the full 1,408 KiB capacity, FEC/pass repair, replacement,
+source binding and failures; prior firmware/remote and PC tests pass. Existing
+IR phase hashes above are unchanged. All file-radio hardware validation is
+pending, including timing, range, loss recovery, replacement and stack peaks.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,
