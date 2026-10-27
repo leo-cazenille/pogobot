@@ -200,9 +200,11 @@ a clean rebuild or `make -B`. All 56 robot/57 remote commands and all 163
 library exports remain. Sanitizer suites pass with and without LTO; all 18
 Python tests pass in Apptainer. Flash-page applications link normally and with
 `-fno-lto`; the integrity example builds and seals. These are software checks:
-peak stack use and hardware behavior remain unmeasured. Installer binaries,
-combined boot images, SDK packages, and the standalone SDK are not refreshed
-by this build-only comparison.
+peak stack use and hardware behavior remain unmeasured. The API v2.7.1
+installer is now refreshed from source commit `097dd13`, including the combined
+bootloader with the 62,228-byte firmware at offset `0x20000`. All seven package
+checksums, slot bounds, embedded bytes, and simulated programmer success/failure
+checks pass. SDK packages and the standalone SDK remain unchanged and compatible.
 
 ## Current decisions
 
@@ -248,5 +250,5 @@ decoder and LED changes still need a hardware trial.
    results for pages 0, 255, 256, 1791, 1792, and 5887.
 5. Program one test robot and each remote type from the API v2.7.1 package,
    then verify the reported version and repeat the upload and flash tests.
-6. Validate LTO firmware on hardware, including console commands, sensor/SPI
-   access, and IR upload timing, before refreshing release packages.
+6. Validate the refreshed LTO installer images on hardware, including console
+   commands, sensor/SPI access, and IR upload timing, before a stable release.

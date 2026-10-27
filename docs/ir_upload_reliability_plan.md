@@ -97,6 +97,14 @@ is commit `d61344d6d6eb431fb6fece31db5d4097b2f32392`; the library retains all
 163 exported symbols. The installer images and SDK archive were refreshed
 from the source commit above. Hardware validation of these fixes is pending.
 
+Installer optimization follow-up (2026-10-27): the API v2.7.1 installer now
+uses source commit `097dd13d020d269c6155ca57185aa5990d6e569a` with LTO.
+Robot and embedded bootloader Pogobios are 62,228 bytes; remote Pogobios is
+51,052 bytes. Existing gateware is retained. Checksums, flash-slot bounds,
+embedded firmware identity, and simulated installer success/failure tests pass.
+IR phase implementation hashes above are unchanged; hardware validation of
+these optimized images remains pending. The separate SDK archive is unchanged.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,

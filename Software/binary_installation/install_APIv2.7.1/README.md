@@ -16,8 +16,10 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `b07404fc577135adecb12d338edef0f01959c87a` using the existing
-gateware.
+source commit `097dd13d020d269c6155ca57185aa5990d6e569a` using the existing
+gateware. LTO, function/data sections, and linker garbage collection reduce
+robot and bootloader Pogobios to 62,228 bytes and remote Pogobios to 51,052
+bytes. All 56 robot and 57 remote console commands remain.
 
 This build fixes the eight release-review findings while preserving the public
 C API. Serial frames and IR payloads are checked before copying. Application
@@ -36,7 +38,8 @@ conversions. Rebuild user applications with the refreshed SDK library.
 - `SHA256SUMS`: checksums for the two scripts and five binaries.
 
 The matching SDK is packaged separately as `../sdk_APIv2.7.1.tar.gz`, with its
-own `../sdk_APIv2.7.1.tar.gz.sha256` checksum file.
+own `../sdk_APIv2.7.1.tar.gz.sha256` checksum file. That SDK remains compatible
+and is unchanged by this firmware optimization refresh.
 
 ## Program a device
 
@@ -62,19 +65,25 @@ pages begin at `0x90000`, after the marker's erase block.
 
 ## Build and validation
 
-The v3 bootloader and normal robot were built with `make bootloader` and
-`make gateware` from `Software/`. The remote was built with
-`./pogosoc.py --cpu-variant=lite --target=pogobotv3 --remocon --build`, and
-the SDK with `make -C sdk clean all`, inside `pogobot.sif`. All five binaries
-fit their flash slots, and the package checksums pass. The packaged SDK's
-`firmware_integrity` and `test_read_write_flash` examples cross-build. A host
-test with a fake `iceprog` checked both installers' file paths, offsets,
-marker contents, cleanup, and failure behavior.
+The initial gateware builds used `--build`. This refresh rebuilds software
+and combines it with that existing gateware. From `Software/`:
+
+```sh
+apptainer exec --cleanenv ../pogobot.sif ./pogosoc.py --cpu-variant=lite --target=pogobotv3 --bootloader
+apptainer exec --cleanenv ../pogobot.sif ./pogosoc.py --cpu-variant=lite --target=pogobotv3
+apptainer exec --cleanenv ../pogobot.sif ./pogosoc.py --cpu-variant=lite --target=pogobotv3 --remocon
+```
+
+All five binaries fit their flash slots, and all seven package checksums pass.
+The combined bootloader's header, gateware, embedded firmware, and erased
+padding match the build outputs byte for byte. A host test with a fake
+`iceprog` checked both installers from another working directory, including
+file paths, offsets, marker contents, cleanup, and programmer-failure handling.
 
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-71,180-byte Pogobios at offset
+62,228-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -95,3 +104,9 @@ on errors. All 18 Python upload tests pass. A clean SDK package compiled all
 32 examples; its library retains the same 163 exported symbols. The standalone
 SDK's integrity and flash-page examples also cross-build. The current release
 fixes await hardware validation.
+
+The LTO build also passes the native sanitizer suites with LTO enabled. An
+application using flash-page APIs omitted from Pogobios links against the full
+library archive, both normally and with `-fno-lto`. The integrity example builds
+and seals with that archive. Booting, SPI/sensor access, and IR upload timing
+with these optimized installer images still need hardware validation.
