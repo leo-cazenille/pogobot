@@ -22,4 +22,5 @@
 
 - [PFFS file commands](../Software/readme.md#pffs-file-commands): BIOS file
   management, UART transfers, flash layout and persistence limits;
-  [vendored source notes](../Software/pogobios/pffs/README.md).
+  [shared pogolib core](../Software/pogolib/pffs/README.md) and
+  [BIOS adapter](../Software/pogobios/pffs/README.md).

@@ -1,6 +1,9 @@
 #ifndef POGO_UTILS_FLASH_FILE_H
 #define POGO_UTILS_FLASH_FILE_H
 
+/* SDK feature marker; the persistent v4 schema and existing APIs are unchanged. */
+#define POGOBOT_PFFS_API_VERSION 4u
+
 /**
  * @file flash_file.h
  * @brief Small, bounded named-file catalog over Pogobot user flash.

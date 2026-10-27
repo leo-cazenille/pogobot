@@ -12,7 +12,7 @@
  */
 #ifndef PFFS_SHELL_TRANSFER_H
 #define PFFS_SHELL_TRANSFER_H
-#include "flash_log.h"
+#include <pffs/flash_log.h>
 
 enum { PFT_CHUNK = 48, PFT_HEADER = 16, PFT_FORMAT = 0x8002,
        PFT_TIMEOUT_MS = 30000 };

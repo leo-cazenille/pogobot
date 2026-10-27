@@ -11,7 +11,7 @@
 #include "flash_log.h"
 
 #include "flash_file_internal.h"
-#include <pogobot.h> /* Pogobios provides the same v3 page API. */
+#include "flash_platform.h"
 
 #include <limits.h>
 #include <string.h>

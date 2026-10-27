@@ -518,8 +518,12 @@ The existing 5888-page user-flash region is unchanged. PFFS reserves 64 KiB
 at physical `0x90000–0x9FFFF` for catalogs and uses the following 1408 KiB
 at `0xA0000–0x1FFFFF` for file extents. Raw page writes by an application can
 still overwrite this filesystem; applications sharing it must use the same
-PFFS v4 layout. User programs continue to link their own filesystem code,
-for example from `pogo-utils`; the BIOS does not provide runtime system calls.
+PFFS v4 layout. The SDK exposes the file and log APIs through `<pogobot.h>`
+(or `<pffs/flash_file.h>` and `<pffs/flash_log.h>`) and links them from
+`libpogobot.a`. Pogobios uses that same implementation; applications still
+link their own executable and do not call into BIOS runtime services.
+Existing `pogo-utils/flash_file.h` and `flash_log.h` includes forward to the SDK.
+See [library integration](pogolib/pffs/README.md) for backend and formatting policy.
 
 Close the serial terminal before using the host transfer tool, then run these
 commands from `Software/`. The robot must be at its Pogobios prompt:

@@ -208,23 +208,26 @@ bootloader with the 62,228-byte firmware at offset `0x20000`. All seven package
 checksums, slot bounds, embedded bytes, and simulated programmer success/failure
 checks pass. SDK packages and the standalone SDK remain unchanged and compatible.
 
-PFFS v4 is now integrated privately into Pogobios, including file management,
-CRC validation, incremental defrag and the existing 48-byte PFT1 UART protocol.
-The real 4 KiB erase backend is mandatory. Boot and command entry never format
-implicitly; only `format YES` does. Native commands and a 160-byte console retain
-history/completion, service timeouts during partial input, reject excess input,
-and serialize file work against other commands and IR upload entry. The layout
-and public SDK API are unchanged. The NOR suites, full/minimal console tests,
-and 19 host-client transfer tests pass with LTO and fatal sanitizers; existing
-IR/API suites and all 18 IR Python tests pass. User testing confirmed the earlier
-LTO installer works on one robot; the new PFFS operations still need hardware
-validation, including persistence across reboot and firmware upload.
-Robot/bootloader binaries are 86,732 bytes with 74 commands; the remote
-is 75,572 bytes with 75 commands. Robot static SRAM use is 103,240 bytes,
-leaving 27,832 bytes for stack/runtime work.
-The API v2.7.1 installer now packages this PFFS build from source commit
-`4aee02661ca595080b1c39a37dbad294b41f546e`. Package checksums, slot bounds,
-bootloader embedding and simulated programmer success/failure checks pass.
+PFFS v4 file and append-log code is now maintained in `Software/pogolib/pffs`
+and included in `libpogobot.a`. Pogobios links that library; SDK applications
+get the same API from `<pogobot.h>` or the standalone `<pffs/...>` headers.
+pogo-utils keeps forwarding headers and consumes the SDK archive on hardware
+and its portable sources on the host. Hardware defaults to real 4 KiB erases;
+only explicit simulator builds select page-write erase emulation. Storage
+layout and existing signatures are unchanged. The BIOS console/transfer policy
+still requires `format YES`, bounded input and serialized file sessions.
+
+All 163 prior library exports remain; the archive now has 206 symbols,
+including all 35 public PFFS functions. SDK-only applications link every PFFS
+entry point both normally and with `-fno-lto`; standalone headers compile as
+C++. NOR file/log tests, full/minimal BIOS console tests and all 19 host-client
+transfer cases pass under LTO with fatal ASan/UBSan. All 15 pogo-utils Debug
+CTests pass against the shared sources, and its flash shell cross-builds for
+hardware and the simulator. Existing IR/API fault suites pass. PFFS hardware
+behavior and persistence across reboot/firmware upload remain unvalidated.
+The earlier LTO installer worked on one user-tested robot. The shared-core
+robot build remains 86,732 bytes, with no new application runtime dependency
+on the BIOS. Installer and SDK refresh follows the source commit.
 
 ## Current decisions
 
@@ -234,6 +237,8 @@ bootloader embedding and simulated programmer success/failure checks pass.
 - Use fixed 16+4 Cauchy Reed–Solomon coding with four-group sender
   interleaving. One coded pass is the initial default; hardware results may
   justify more passes or different pacing.
+- Maintain one PFFS core in pogolib; keep BIOS protocol/policy separate and
+  distribute native sources through the SDK.
 - Keep firmware changes small and preserve the existing application API where
   possible. New diagnostics must have bounded RAM and execution costs.
 - Treat the reported upload as an engineering failure case, not a measured

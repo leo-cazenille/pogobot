@@ -5,7 +5,7 @@
  * @file flash_file_internal.h
  * @brief Serialized catalog layout and helpers shared by flash-file modules.
  *
- * This header is private to pogo-utils. Applications should include
+ * This header is private to pogolib. Applications should include
  * flash_file.h and must not depend on byte offsets below.
  *
  * Each 256-byte catalog page is encoded explicitly in little-endian order:

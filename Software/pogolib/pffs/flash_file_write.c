@@ -23,18 +23,7 @@
 #include "flash_file_internal.h"
 #include "flash_log.h"
 
-#include <pogobot.h> /* Pogobios provides the same v3 page API. */
-
-/* A BIOS build must never silently use the simulator's erase emulation. */
-#ifndef REAL_ROBOT
-#error "Pogobios PFFS requires the REAL_ROBOT sector erase backend"
-#endif
-
-#ifdef REAL_ROBOT
-/* The SDK exposes the physical start of the user-flash region. The SPI
- * primitive erases one aligned 4 KiB sector at an absolute chip offset. */
-#include "spi.h"
-#endif
+#include "flash_platform.h"
 
 #include <limits.h>
 #include <string.h>
@@ -132,7 +121,7 @@ static bool erase_sector_verified(uint16_t first_page) {
         first_page > POGO_FLASH_FILE_USER_PAGES -
             POGO_FLASH_FILE_ERASE_SECTOR_PAGES) return false;
     uint8_t page[POGO_FLASH_FILE_PAGE_SIZE];
-#ifdef REAL_ROBOT
+#ifndef POGOBOT_PFFS_SIMULATOR
     if (spiBeginErase4(POGOBOT_USER_FLASH_START_OFFSET +
             (uint32_t)first_page * POGO_FLASH_FILE_PAGE_SIZE) != 0) return false;
 #else

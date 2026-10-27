@@ -9,6 +9,7 @@ import tempfile
 def main():
     tests = Path(__file__).resolve().parent
     bios = tests.parent / "pogobios"
+    lib = tests.parent / "pogolib"
     with tempfile.TemporaryDirectory(prefix="pogobios-pffs-test-") as name:
         temp = Path(name)
         for header in ("pogobot.h", "spi.h", "uart.h"):
@@ -21,8 +22,8 @@ def main():
         flags = ["cc", "-std=c11", "-Os", "-g", "-flto", "-Wall",
                  "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                  "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
-                 "-fno-omit-frame-pointer", "-DREAL_ROBOT", "-I", str(temp), "-I", str(bios)]
-        core = [str(p) for p in sorted((bios / "pffs").glob("flash_*.c"))]
+                 "-fno-omit-frame-pointer", "-DREAL_ROBOT", "-I", str(temp), "-I", str(bios), "-I", str(lib)]
+        core = [str(p) for p in sorted((lib / "pffs").glob("flash_*.c"))]
         for source in ("pffs_nor_test.c", "pffs_log_nor_test.c"):
             binary = temp / Path(source).stem
             subprocess.run([*flags, str(tests / source), *core, "-o", str(binary)], check=True)
