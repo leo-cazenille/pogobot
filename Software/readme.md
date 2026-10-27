@@ -497,6 +497,7 @@ are not forwarded over IR.
 | `df` | Show allocated sectors, free capacity and file-ID usage. |
 | `stat <id\|name>` | Display metadata and log committed length. |
 | `cat <id\|name>` | Hex-dump an ordinary file; display a log with binary bytes escaped. |
+| `load <id\|name>` | On robots, install a raw controller binary in the application slot; then use `run`. |
 | `touch <id> <name\|-> [bytes]` | Create an ordinary file; default length is zero. |
 | `write <id\|name> <offset> <hexbytes>` | Edit a one-page ordinary file, extending its length if needed. |
 | `mv <id\|name> <new_name\|->` | Change the optional name without changing the ID. |
@@ -546,6 +547,39 @@ Other console commands are rejected during those operations; IR messages are
 drained without entering a firmware upload. Start or retry `rc_flash_robot`
 after the file operation finishes. Filesystem commands themselves are UART-only.
 Console history and completion remain available in the full terminal build.
+
+To keep several controllers in PFFS and select one later, first upload the
+SDK-built `firmware.bin` as an ordinary raw file. From `Software/`, with the
+robot at its BIOS prompt and the serial terminal closed:
+
+```sh
+python3 pffs_transfer.py --port /dev/ttyUSB0 upload path/to/firmware.bin --id 20 --name controller_a
+```
+
+Reconnect the terminal and select the controller by name or numeric ID:
+
+```text
+load controller_a
+run
+```
+
+`load` behaves like a completed `serialboot`: it installs persistently at
+physical `0x60000` (CPU address `0x260000`) and leaves the prompt available.
+It does not reboot automatically. The saved PFFS file remains intact. Return to
+`Pogoboot>` before selecting another controller: `run 0` works from a BIOS
+console, or power-cycle a running application. Use raw `.bin` images linked for
+that address; ELF files, PFT1 envelopes
+and logs are rejected. Files must be 4–131,072 bytes and fit the existing
+128 KiB application slot; this does not enlarge the SDK linker or SRAM limits.
+The command is UART-only on robots and is absent from the remote console.
+
+The loader validates the stored file before erasing the current image, then
+checks programmed bytes and the whole installed CRC before committing the
+validity marker. It does not erase gateware, the bootloader or PFFS. Installation
+replaces the previous controller: interruption after erasure can leave a partial
+image, which must be installed again from `Pogoboot>`. The saved source remains
+available for that retry. Loading is synchronous and blocks other console work
+until it succeeds or reports a flash error.
 
 Catalog changes, replacements and overlapping defrag moves are not power-loss
 atomic. Keep power connected and back up important data before those operations.

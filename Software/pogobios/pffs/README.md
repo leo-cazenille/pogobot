@@ -15,6 +15,14 @@ sessions against other commands and prohibits PFFS over IR. Command and transfer
 entry points check catalogs first, so only `format YES` can initialize or replace
 them. The lower-level library retains its existing create-time autoformat policy.
 
+`load.c/.h` adds a robot-only `load <id|name>` controller installer. It validates
+the stored raw file before changing the application slot, uses the existing page
+cache, verifies every programmed page and the complete installed CRC, and commits
+the boot marker last. Failed writes leave the image invalid. The source file is
+read-only throughout installation; `run` remains a separate command. Native
+console tests inject marker erase/write, sector erase, page write, source-read
+and later-page corruption faults, including retry and 128 KiB boundary cases.
+
 The local LiteX readers retain their original notices and add bounded 160-byte
 input plus file-service hooks. Completion uses the same header. Native NOR,
 protocol and full/minimal console tests compile the canonical pogolib sources.

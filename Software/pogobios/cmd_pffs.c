@@ -6,6 +6,7 @@
 #include "pffs/flash_file.h"
 #include "pffs/flash_log.h"
 #include "pffs/transfer.h"
+#include "pffs/load.h"
 #include <pogobot.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -528,6 +529,9 @@ static void shell_execute(char **words, unsigned count) {
         puts("help | ls | df | stat <id|name> | cat <id|name> | rm <id|name>");
         puts("touch <id> <name|-> [bytes] | mv <id|name> <new_name|->");
         puts("write <id|name> <offset> <hexbytes> | defrag YES | format YES");
+#ifndef REMOCON
+        puts("load <id|name>: install raw controller; then execute run");
+#endif
         puts("UART upload/download: Software/pffs_transfer.py (put/get, CRC, "
              "ACK)");
         puts("abort <session_hex> cancels a transfer; interrupted replacement "
@@ -595,6 +599,19 @@ static void shell_execute(char **words, unsigned count) {
         }
         return;
     }
+#ifndef REMOCON
+    /* Like serialboot, installation replaces the normal application image
+     * but leaves the prompt and PFFS source available until run is requested. */
+    if (strcmp(command, "load") == 0 && count == 2u) {
+        pogo_flash_file_info_t info;
+        pogo_flash_file_status_t status = resolve_file(words[1], &info);
+        if (status != POGO_FLASH_FILE_OK)
+            printf("load: %s\n", pogo_flash_file_status_string(status));
+        else
+            bios_pffs_load_controller(info.id, state.log.page);
+        return;
+    }
+#endif
     if (strcmp(command, "mv") == 0 && count == 3u) {
         pogo_flash_file_info_t info;
         pogo_flash_file_status_t status = resolve_file(words[1], &info);
@@ -703,6 +720,9 @@ PFFS_COMMAND(ls, "List PFFS files and validate CRCs");
 PFFS_COMMAND(df, "PFFS sector and file capacity");
 PFFS_COMMAND(stat, "stat <id|name>");
 PFFS_COMMAND(cat, "cat <id|name> (hex file / escaped log)");
+#ifndef REMOCON
+PFFS_COMMAND(load, "load <id|name> (install raw controller; then run)");
+#endif
 PFFS_COMMAND(touch, "touch <id> <name|-> [bytes]");
 PFFS_COMMAND(write, "write <id|name> <offset> <hexbytes> (one page)");
 PFFS_COMMAND(mv, "mv <id|name> <new_name|->");

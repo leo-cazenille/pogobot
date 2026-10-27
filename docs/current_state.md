@@ -226,7 +226,7 @@ CTests pass against the shared sources, and its flash shell cross-builds for
 hardware and the simulator. Existing IR/API fault suites pass. PFFS hardware
 behavior and persistence across reboot/firmware upload remain unvalidated.
 The earlier LTO installer worked on one user-tested robot. The shared-core
-robot build remains 86,732 bytes, with no new application runtime dependency
+extraction alone kept the robot build at 86,732 bytes, with no application runtime dependency
 on the BIOS. The installer and separate SDK archive are refreshed from source
 commit `7e176a3826ee4f3c2f50c1c2c9d19d7b28a086a8`. Package checksums, slot bounds,
 bootloader embedding and mock programmer success/failure checks pass. Robot static SRAM
@@ -235,6 +235,20 @@ remains 89,088 bytes. All 32 packaged SDK examples build, and unused PFFS
 code is absent from the raw-flash example. The standalone SDK is committed as
 `cdaf6b0` on `sdk_2_7_1`; pogo-utils integration is `1cc1d26` on `dev`.
 PFFS hardware operations still need validation.
+
+Robot BIOS now adds `load <id|name>` to install a saved raw PFFS controller at
+physical `0x60000`, leaving `run` separate as after serialboot. Source catalog
+and data CRCs are checked before invalidating the previous image. Page readback
+and a final installed CRC gate the completion marker; no bootloader, gateware,
+CRC metadata or PFFS sectors are erased. The loader reuses the 256-byte console
+page cache, resets resumable IR state on installation, and rejects incompatible
+containers and files outside the 4..131072-byte slot bounds. The command remains
+UART-only and is excluded on remotes. Full/minimal console tests cover sizes,
+CRC rejection, guard regions, transfer isolation, injected erase/program/read
+faults and retry. Robot Pogobios is 88,100 bytes (+1,368), with 104,608 bytes
+static SRAM and a 26,464-byte stack/runtime gap. No extra page cache is added;
+remote firmware stays 75,572 bytes. Robot and remote cross-builds pass; hardware
+launch and reboot persistence still need verification.
 
 ## Current decisions
 
@@ -284,3 +298,6 @@ decoder and LED changes still need a hardware trial.
    then verify the reported version and repeat the upload and flash tests.
 6. Validate the refreshed installer images on hardware, including PFFS UART
    operations, persistence across reboot/firmware upload, and IR upload timing.
+7. Upload two raw SDK controller binaries to PFFS, select each with `load` and
+   `run`, then verify file CRCs and selection again after reboot. Check a failed
+   installation remains unbootable until a successful retry.
