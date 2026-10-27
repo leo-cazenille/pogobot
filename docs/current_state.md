@@ -288,8 +288,17 @@ service calls. Shared pogolib/SDK defragmentation APIs and the pogo-utils
 sensor/autotest commands and terminal settings are unchanged. Native NOR
 file/log tests (including compaction), full/minimal BIOS console tests and all
 19 UART-client cases pass; the removed BIOS command leaves storage unchanged.
-Release cross-builds and installer refresh are in progress. Fragmentation can
-require running the maintenance application before allocating a large file.
+Source `22eab5a009843491a2a9ecde65956777b66b0b2e` cross-builds for the robot,
+bootloader and remote. Robot/embedded BIOS is now 92,372 bytes (-2,208), with
+111,736 bytes static SRAM and a 19,336-byte stack/runtime gap. Remote BIOS is
+76,852 bytes, with 90,336 bytes static SRAM and a 40,736-byte runtime gap.
+Command-table comparison confirms only defrag is removed; the original CRC-16
+table and full terminal remain. The pogo-utils flash_file example cross-build
+retains `defrag YES` and the shared implementation, and its NOR file/log tests
+pass. The installer images/checksums are refreshed; slot bounds, bootloader
+embedding and mock programmer success/failure checks pass. SDK artifacts remain
+unchanged. Hardware validation is pending. Fragmentation can require running
+the maintenance application before allocating a large file.
 
 ## Current decisions
 

@@ -16,11 +16,11 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `cdf3bd7cb73669dd5f2769b2e3f5f33626ba8f50` using the existing
+source commit `22eab5a009843491a2a9ecde65956777b66b0b2e` using the existing
 gateware. LTO, function/data sections, and linker garbage collection keep
-robot and bootloader Pogobios at 94,580 bytes and remote Pogobios at 79,068
-bytes, including PFFS v4 and IR file transfer. Robot BIOS has 77 commands
-(including 21 filesystem/transfer handlers); remote BIOS has 76 (19 such
+robot and bootloader Pogobios at 92,372 bytes and remote Pogobios at 76,852
+bytes, including PFFS v4 and IR file transfer. Robot BIOS has 76 commands
+(including 20 filesystem/transfer handlers); remote BIOS has 75 (18 such
 handlers). The `load` and `ir_file_abort` commands are robot-only.
 
 This build fixes the eight release-review findings while preserving the public
@@ -38,9 +38,13 @@ PFFS files. The existing v4 layout and user-flash region are unchanged.
 See [PFFS file commands](../../readme.md#pffs-file-commands) and the
 [UART transfer tool](../../pffs_transfer.py). UART file commands act on the connected device; on a Pogoshower they manage
 the controller's files. Use `rc_send_file` below to broadcast a saved file to
-robots. During a UART file transfer or defrag, other commands and IR upload
-entry are blocked. Inactive UART sessions time out after 30
-seconds; defrag runs until completion or a reported error.
+robots. During a UART file transfer, other commands and IR upload entry are
+blocked. Inactive UART sessions time out after 30 seconds.
+
+Defragmentation is available as `defrag YES` in the pogo-utils
+`examples/flash_file` maintenance application. Pogobios omits the command and
+its service state; the shared pogolib/SDK API is unchanged. Compaction can be
+needed after deletions when a new file requires a larger contiguous extent.
 
 The robot-only command `load <id|name>` installs a raw SDK `firmware.bin`
 stored in PFFS, just as a completed `serialboot` would. It leaves the prompt
@@ -50,8 +54,8 @@ the whole installed CRC gate the completion marker. Files must be 4..131072
 bytes; ELF, PFT1 envelopes and logs are refused. No gateware, bootloader or PFFS
 sectors are erased. An interrupted installation can be retried from `Pogoboot>`.
 The loader adds 1,368 bytes to robot firmware and reuses the shared page cache.
-With IR file support included, robot static SRAM is 113,984 bytes, leaving
-a 17,088-byte stack/runtime gap. Peak stack use still needs hardware measurement.
+With IR file support included, robot static SRAM is 111,736 bytes, leaving
+a 19,336-byte stack/runtime gap. Peak stack use still needs hardware measurement.
 The shared public SDK API is unchanged.
 
 ## Broadcast a saved file over IR
@@ -135,7 +139,7 @@ file paths, offsets, marker contents, cleanup, and programmer-failure handling.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-94,580-byte Pogobios at offset
+92,372-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -190,3 +194,12 @@ erase, write, CRC and catalog-publication failures preserve the documented
 locking and publication rules. All 16 pogo-utils host tests pass against the
 refreshed portable SDK core. File-radio timing, range, replacement behavior and
 peak stack use remain unvalidated on hardware.
+
+The BIOS-only defragmentation removal retains every other command, the original
+1,024-byte CRC-16 table, and the full terminal. Normal and embedded robot BIOS
+are 92,372 bytes; the remote is 76,852 bytes. Native file/log compaction tests
+and full/minimal BIOS console tests pass, including rejection of the removed
+command without flash changes. All 19 UART-client tests pass. The pogo-utils
+`flash_file` example cross-build retains `defrag YES` and the linked shared
+compaction implementation; its NOR file/log tests pass. The SDK package and
+public library API are unchanged. Hardware validation remains pending.
