@@ -503,7 +503,6 @@ are not forwarded over IR.
 | `mv <id\|name> <new_name\|->` | Change the optional name without changing the ID. |
 | `rm <id\|name>` | Remove the catalog entry. |
 | `format YES` | Explicitly delete all PFFS files, including calibration files. |
-| `defrag YES` | Compact file extents one page per service step. |
 
 For example, on an already formatted filesystem:
 
@@ -526,6 +525,12 @@ link their own executable and do not call into BIOS runtime services.
 Existing `pogo-utils/flash_file.h` and `flash_log.h` includes forward to the SDK.
 See [library integration](pogolib/pffs/README.md) for backend and formatting policy.
 
+Compaction is a maintenance operation available as `defrag YES` in the
+`pogo-utils/examples/flash_file` application. Pogobios omits that command;
+the shared library retains its defragmentation API. After deletions, a large
+file may need compaction to obtain a contiguous extent even when `df` reports
+enough total free space.
+
 Close the serial terminal before using the host transfer tool, then run these
 commands from `Software/`. The robot must be at its Pogobios prompt:
 
@@ -542,8 +547,8 @@ matching ID/name/type and an unchanged allocated page count. The protocol uses
 expires after 30 seconds, even with an unfinished console line. The BIOS
 accepts up to 159 input characters and rejects an overlong command in full.
 
-UART transfers and defrag own the filesystem until completion or timeout.
-Other console commands are rejected during those operations; IR messages are
+UART transfers own the filesystem until completion or timeout.
+Other console commands are rejected during those transfers; IR messages are
 drained without entering a firmware upload. Start or retry `rc_flash_robot`
 after the file operation finishes. Filesystem commands themselves are UART-only.
 Console history and completion remain available in the full terminal build.
@@ -645,8 +650,9 @@ with repeated START keepalives; DATA/parity pacing is 200 ms per frame. Thus
 large files can take a long time. These conservative defaults and IR range,
 loss recovery and stack margins still need hardware measurement.
 
-Catalog changes, replacements and overlapping defrag moves are not power-loss
-atomic. Keep power connected and back up important data before those operations.
+Catalog changes and replacements are not power-loss atomic. Keep power
+connected and back up important data before those operations. The maintenance
+application's overlapping defrag moves have the same limitation.
 `format YES` invalidates catalogs rather than securely wiping payload bytes.
 Corrupt or older catalogs are rejected without automatic migration or erasure.
 

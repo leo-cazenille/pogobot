@@ -329,16 +329,17 @@ static void selftest(void) {
     command("df", true);
     command("touch 2 later 257", true);
     command("rm renamed", true);
-    command("defrag YES", true);
-    assert(bios_pffs_busy());
-    command("serialboot", true);
-    assert(dangerous_calls == 0);
-    for (unsigned steps = 0; bios_pffs_busy(); ++steps) {
-        assert(steps < 1000);
-        bios_pffs_service();
-    }
+    /* BIOS compaction is unavailable; the shared library still supports
+     * maintenance applications. Rejecting the old command must not move data. */
+    assert(pogo_flash_file_find(2, &info) == POGO_FLASH_FILE_OK);
+    uint16_t original_page = info.first_page;
+    unsigned before_programs = programs;
+    before = erases;
+    char *defrag_args[] = {"YES"};
+    assert(bios_console_dispatch("defrag", 1, defrag_args, true) == NULL);
+    assert(!bios_pffs_busy() && erases == before && programs == before_programs);
     assert(pogo_flash_file_find(2, &info) == POGO_FLASH_FILE_OK &&
-           info.first_page == 256);
+           info.first_page == original_page);
     assert(pogo_flash_file_read_page_secure(2, 1, page, NULL) ==
            POGO_FLASH_FILE_OK);
     (void)bios_pffs_input_reset();

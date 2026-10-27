@@ -28,6 +28,10 @@ input plus file-service hooks. Completion uses the same header. Native NOR,
 protocol and full/minimal console tests compile the canonical pogolib sources.
 See [PFFS file commands](../../readme.md#pffs-file-commands) for usage.
 
+Defragmentation remains in pogolib for maintenance applications such as
+`pogo-utils/examples/flash_file`; its command and service state are omitted
+from Pogobios. Files still require contiguous extents when allocated.
+
 `ir_file.c` sends stored files using a private user-packet command range
 0x15..0x19. The shared decoder and GF tables live in `../ir_boot.c`; firmware
 uploads retain their original packet type and command range. File START derives

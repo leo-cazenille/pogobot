@@ -1,6 +1,6 @@
 # Current repository state
 
-Updated: 2026-10-27. Branch: `optimized_remote_transfer`; this is a working-tree
+Updated: 2026-10-28. Branch: `optimized_remote_transfer`; this is a working-tree
 snapshot, including local changes.
 
 ## Inspected
@@ -281,6 +281,15 @@ C++ headers and all 16 pogo-utils host tests pass. Installer checksums, firmware
 slot bounds, bootloader embedding and mock programmer paths pass. The v2.7.1
 installer and separate SDK archive are refreshed. File-radio hardware validation
 and peak stack measurement remain pending.
+
+Pogobios now omits the explicit `defrag YES` command, compaction state and
+service calls. Shared pogolib/SDK defragmentation APIs and the pogo-utils
+`examples/flash_file` command remain intact. CRC tables, memory diagnostics,
+sensor/autotest commands and terminal settings are unchanged. Native NOR
+file/log tests (including compaction), full/minimal BIOS console tests and all
+19 UART-client cases pass; the removed BIOS command leaves storage unchanged.
+Release cross-builds and installer refresh are in progress. Fragmentation can
+require running the maintenance application before allocating a large file.
 
 ## Current decisions
 

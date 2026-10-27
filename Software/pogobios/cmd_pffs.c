@@ -16,8 +16,6 @@
 
 static struct {
     pogo_flash_log_t log; /* One shared page cache, including UART transfers. */
-    pogo_flash_file_defrag_t defrag;
-    bool defrag_active;
     pffs_transfer_t transfer;
 } state;
 static time_reference_t clock_origin;
@@ -290,79 +288,6 @@ static void shell_df(void) {
          "Free space may be fragmented.");
 }
 
-/** Begin a potentially long, destructive compaction only after explicit YES.
- * Logs have per-page CRCs rather than a catalog whole-file CRC; preflight them
- * with their reader before any file moves. Ordinary files are checked by the
- * incremental defragmenter immediately before each move. */
-static void shell_defrag_start(void) {
-    if (!catalogs_ready())
-        return;
-    for (uint8_t id = 1u; id <= POGO_FLASH_FILE_MAX_FILES; ++id) {
-        pogo_flash_file_info_t info;
-        pogo_flash_file_status_t status = pogo_flash_file_find(id, &info);
-        if (status == POGO_FLASH_FILE_NOT_FOUND)
-            continue;
-        if (status != POGO_FLASH_FILE_OK) {
-            printf("defrag: file %u: %s\n", (unsigned)id,
-                   pogo_flash_file_status_string(status));
-            return;
-        }
-        if (info.format_version == POGO_FLASH_LOG_FORMAT_VERSION) {
-            pogo_flash_log_status_t log_status =
-                pogo_flash_log_open(&state.log, id);
-            if (log_status != POGO_FLASH_LOG_OK) {
-                printf("defrag: log %u failed validation (status %u)\n",
-                       (unsigned)id, (unsigned)log_status);
-                return;
-            }
-        }
-    }
-    pogo_flash_file_status_t status =
-        pogo_flash_file_defrag_begin(&state.defrag);
-    if (status != POGO_FLASH_FILE_OK) {
-        printf("defrag: %s\n", pogo_flash_file_status_string(status));
-        return;
-    }
-    state.defrag_active = true;
-    pogobot_led_setColor(25u, 8u, 0u);
-    puts("defrag: started; keep power connected until completion");
-}
-
-/** Perform one bounded unit of work between UART polls or simulator ticks.
- * A failure may leave the current file damaged if its extents overlapped. */
-static void shell_defrag_service(void) {
-    if (!state.defrag_active)
-        return;
-    uint8_t moved_before = state.defrag.moved_files;
-    bool done = false;
-    pogo_flash_file_status_t status =
-        pogo_flash_file_defrag_step(&state.defrag, &done);
-    if (status != POGO_FLASH_FILE_OK) {
-        state.defrag_active = false;
-        pogobot_led_setColor(25u, 0u, 25u);
-        printf("defrag: FAILED (%s); current file may need backup restore\n",
-               pogo_flash_file_status_string(status));
-        /* The main console prints its prompt after the operation. */
-        return;
-    }
-    if (state.defrag.moved_files != moved_before) {
-        printf("# FLASH_DEFRAG_MOVED,id=%u,from=%u,to=%u\n",
-               (unsigned)state.defrag.last_moved_id,
-               (unsigned)state.defrag.last_from_page,
-               (unsigned)state.defrag.last_to_page);
-    }
-    if (done) {
-        state.defrag_active = false;
-        pogobot_led_setColor(0u, 25u, 0u);
-        unsigned free_kib =
-            ((unsigned)POGO_FLASH_FILE_USER_PAGES - state.defrag.cursor_page) *
-            POGO_FLASH_FILE_PAGE_SIZE / 1024u;
-        printf("defrag: complete, moved %u files, contiguous_free=%uK\n",
-               (unsigned)state.defrag.moved_files, free_kib);
-        /* The main console prints its prompt after the operation. */
-    }
-}
-
 /** Print one file's stable identity and allocation; no payload is changed. */
 static void shell_stat(const pogo_flash_file_info_t *info) {
     printf("id=%u name=%s format=%u page=%u pages=%u bytes=%lu "
@@ -507,12 +432,6 @@ static void shell_write(const pogo_flash_file_info_t *info,
 /** Fixed-size, whitespace-delimited command dispatcher. Labels cannot
  * contain spaces, matching the stored exact-name lookup and small line cap. */
 static void shell_execute(char **words, unsigned count) {
-    /* Even read commands are blocked while a copied extent is not yet
-     * published in its catalog. Simulator robot switching is blocked too. */
-    if (state.defrag_active) {
-        puts("defrag in progress; wait for completion");
-        return;
-    }
     if (count == 0u)
         return;
     /* Transfer frames precede ordinary file commands. A live session owns
@@ -547,7 +466,7 @@ static void shell_execute(char **words, unsigned count) {
     if (strcmp(command, "help") == 0 && count == 1u) {
         puts("help | ls | df | stat <id|name> | cat <id|name> | rm <id|name>");
         puts("touch <id> <name|-> [bytes] | mv <id|name> <new_name|->");
-        puts("write <id|name> <offset> <hexbytes> | defrag YES | format YES");
+        puts("write <id|name> <offset> <hexbytes> | format YES");
 #ifndef REMOCON
         puts("load <id|name>: install raw controller; then execute run");
 #endif
@@ -571,11 +490,6 @@ static void shell_execute(char **words, unsigned count) {
     }
     if (strcmp(command, "df") == 0 && count == 1u) {
         shell_df();
-        return;
-    }
-    if (strcmp(command, "defrag") == 0 && count == 2u &&
-        strcmp(words[1], "YES") == 0) {
-        shell_defrag_start();
         return;
     }
     if (strcmp(command, "format") == 0 && count == 2u &&
@@ -668,14 +582,14 @@ void bios_pffs_init(void) {
 }
 
 bool bios_pffs_busy(void) {
-    return state.defrag_active || pffs_transfer_busy(&state.transfer) || ir_file_busy();
+    /* Compaction stays in pogolib for maintenance applications; the BIOS
+     * reserves the filesystem only for UART and IR file sessions. */
+    return pffs_transfer_busy(&state.transfer) || ir_file_busy();
 }
 
 bool bios_pffs_allows(const char *command) {
     if (ir_file_busy()) return strcmp(command, "ir_file_abort") == 0 ||
                                strcmp(command, "help") == 0;
-    if (state.defrag_active)
-        return false;
     if (!pffs_transfer_busy(&state.transfer))
         return true;
     /* Transfers own the shared cache and flash until END, abort or timeout. */
@@ -707,10 +621,6 @@ void bios_pffs_service(void) {
     bool active = pffs_transfer_busy(&state.transfer);
     pffs_transfer_poll(&state.transfer, now_ms);
     if (active && !pffs_transfer_busy(&state.transfer))
-        input_reset = true;
-    bool moving = state.defrag_active;
-    shell_defrag_service();
-    if (moving && !state.defrag_active)
         input_reset = true;
 }
 
@@ -762,7 +672,6 @@ PFFS_COMMAND(write, "write <id|name> <offset> <hexbytes> (one page)");
 PFFS_COMMAND(mv, "mv <id|name> <new_name|->");
 PFFS_COMMAND(rm, "rm <id|name>");
 PFFS_COMMAND(format, "format YES (delete all PFFS files)");
-PFFS_COMMAND(defrag, "defrag YES (compact extents)");
 PFFS_COMMAND(put, "UART file upload: use pffs_transfer.py");
 PFFS_COMMAND(get, "UART file download: use pffs_transfer.py");
 PFFS_COMMAND(putdata, "UART upload chunk");
