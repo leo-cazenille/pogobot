@@ -581,6 +581,70 @@ image, which must be installed again from `Pogoboot>`. The saved source remains
 available for that retry. Loading is synchronous and blocks other console work
 until it succeeds or reports a flash error.
 
+### Broadcast a saved file over IR
+
+Store a named ordinary file in the sender's PFFS, then use one of these commands
+at its BIOS prompt (the optional pass count defaults to one):
+
+```text
+ir_send_file controller_a 3
+```
+
+On a Pogowall/Pogoshower controller, use the remote variant:
+
+```text
+rc_send_file controller_a 3 --replace
+```
+
+The sender reads its own flash, so the PC is not involved in transmission. Both
+variants broadcast through all IR emitters at full power, using 64-byte chunks,
+16+4 Reed–Solomon parity and four-group interleaving. Only one transmitter should
+broadcast at a time. `Q` or Escape stops it; progress describes sent chunks,
+and the final message explicitly leaves receiver completion unconfirmed. There
+are no acknowledgements to the sender and no automatic multi-hop relaying.
+
+Receiving robots need this updated BIOS and an idle `Pogoboot>` or `Pogobot>`
+console. A valid START enters reception automatically. The file keeps its name,
+payload format and exact length; each receiver chooses a free local ID. Files
+may contain 0..1,441,792 bytes (1,408 KiB). Names must be 1..32 printable ASCII
+bytes without spaces. Append-log containers are unsupported; ordinary files,
+including raw controllers and optional PFT1 envelopes, retain their bytes.
+
+By default, an existing different file with the same name is refused. An already
+verified identical copy is skipped. `--replace` permits overwriting that name,
+preserves its ID and requires the same payload format and allocated page count.
+The exact byte length may change within that allocation. A missing name is
+created even with `--replace`. Replacement is in place and an interruption may
+damage the old file; it is not rollback or a resizing operation.
+
+A new file remains unpublished until all chunks, programmed bytes and the final
+CRC are verified. Lost chunks can be repaired by later passes or by repeating
+the same command/flags while the receiver stays powered. STARTs are bound to
+sender, content CRC, length, name, format and replacement policy. Transfer IDs
+are stable hashes of that metadata. Receiver logs report success and the local
+ID, or an incomplete/error state. A successful file transfer leaves firmware
+and boot-validity markers unchanged. Execute `load <name>` and `run` separately
+to install a received controller.
+
+An incomplete reception retains its extent and RAM bitmap after timeout or
+network cancellation. Until it completes, the receiver locks other file/flash
+commands to protect that unpublished allocation. After reception stops, discard
+it explicitly at the receiver's UART console with:
+
+```text
+ir_file_abort
+```
+
+This releases the reservation, and does not undo replacement writes. Reboot also
+loses the RAM bitmap/reservation; an unpublished new file will be received from
+the beginning. A different pending file needs an abort first. No radio command
+implicitly formats a missing, corrupt or older catalog.
+
+The sender allows 500 ms per allocated 4 KiB sector plus 3 s for preparation,
+with repeated START keepalives; DATA/parity pacing is 200 ms per frame. Thus
+large files can take a long time. These conservative defaults and IR range,
+loss recovery and stack margins still need hardware measurement.
+
 Catalog changes, replacements and overlapping defrag moves are not power-loss
 atomic. Keep power connected and back up important data before those operations.
 `format YES` invalidates catalogs rather than securely wiping payload bytes.

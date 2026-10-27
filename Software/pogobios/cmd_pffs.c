@@ -7,6 +7,7 @@
 #include "pffs/flash_log.h"
 #include "pffs/transfer.h"
 #include "pffs/load.h"
+#include "ir_file.h"
 #include <pogobot.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -525,6 +526,24 @@ static void shell_execute(char **words, unsigned count) {
         return;
     }
     const char *command = words[0];
+    if (strcmp(command, "ir_file_abort") == 0 && count == 1u) {
+        ir_file_abort(); puts("IR file reservation released"); return;
+    }
+    if ((strcmp(command, "ir_send_file") == 0 || strcmp(command, "rc_send_file") == 0) &&
+        count >= 2u && count <= 4u) {
+        uint32_t passes = 1u; bool replace = false, have_passes = false;
+        for (unsigned i = 2u; i < count; ++i) {
+            if (strcmp(words[i], "--replace") == 0 && !replace) replace = true;
+            else if (!have_passes && parse_u32(words[i], &passes) && passes > 0u && passes <= 255u)
+                have_passes = true;
+            else { puts("usage: ir_send_file/rc_send_file <id|name> [1..255 passes] [--replace]"); return; }
+        }
+        pogo_flash_file_info_t info;
+        pogo_flash_file_status_t status = resolve_file(words[1], &info);
+        if (status != POGO_FLASH_FILE_OK) printf("IR file: %s\n", pogo_flash_file_status_string(status));
+        else ir_file_send(info.id, (unsigned)passes, replace, state.log.page);
+        return;
+    }
     if (strcmp(command, "help") == 0 && count == 1u) {
         puts("help | ls | df | stat <id|name> | cat <id|name> | rm <id|name>");
         puts("touch <id> <name|-> [bytes] | mv <id|name> <new_name|->");
@@ -538,6 +557,8 @@ static void shell_execute(char **words, unsigned count) {
              "can lose data.");
         puts("Ordinary cat is hex; log bytes are text with binary escaped.");
         puts("write supports one-page ordinary files only.");
+        puts("ir_send_file / rc_send_file <id|name> [passes] [--replace]; Q cancels");
+        puts("ir_file_abort releases a pending IR reception; partial replacement can lose data.");
         return;
     }
     if (strcmp(command, "ls") == 0 && count == 1u) {
@@ -643,10 +664,12 @@ void bios_pffs_init(void) {
 }
 
 bool bios_pffs_busy(void) {
-    return state.defrag_active || pffs_transfer_busy(&state.transfer);
+    return state.defrag_active || pffs_transfer_busy(&state.transfer) || ir_file_busy();
 }
 
 bool bios_pffs_allows(const char *command) {
+    if (ir_file_busy()) return strcmp(command, "ir_file_abort") == 0 ||
+                               strcmp(command, "help") == 0;
     if (state.defrag_active)
         return false;
     if (!pffs_transfer_busy(&state.transfer))
@@ -706,6 +729,7 @@ static void pffs_command(const char *name, int count, char **params) {
         return;
     }
     if (!bios_pffs_busy()) {
+        ir_file_abort(); /* Drop completed-file cache before local PFFS access. */
         /* Each new session starts with a nearby origin; old completed tokens
          * remain cached for idempotent END retries. No flash is touched. */
         now_ms = 0;
@@ -716,6 +740,12 @@ static void pffs_command(const char *name, int count, char **params) {
 #define PFFS_COMMAND(name, help_text)                                          \
     static void name##_handler(int n, char **p) { pffs_command(#name, n, p); } \
     define_command(name, name##_handler, help_text, PFFS_CMDS)
+#ifdef REMOCON
+PFFS_COMMAND(rc_send_file, "rc_send_file <id|name> [passes] [--replace]");
+#else
+PFFS_COMMAND(ir_send_file, "ir_send_file <id|name> [passes] [--replace]");
+PFFS_COMMAND(ir_file_abort, "Discard pending IR file and release PFFS");
+#endif
 PFFS_COMMAND(ls, "List PFFS files and validate CRCs");
 PFFS_COMMAND(df, "PFFS sector and file capacity");
 PFFS_COMMAND(stat, "stat <id|name>");

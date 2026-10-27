@@ -255,6 +255,25 @@ unchanged. Native PFFS/console, 19 UART-client
 cases and the IR/API fault suites pass. Hardware launch and reboot persistence
 still need verification.
 
+One-way IR file broadcasting now has robot `ir_send_file` and remote
+`rc_send_file` commands with pass count and explicit `--replace`. Receivers
+allocate by name, preserve existing IDs on same-page-count replacement, and
+publish only after per-write readback and whole-content CRC. Decoder/GF code
+is shared with firmware uploads; file packets use a distinct user-packet command
+range and cannot write firmware slots/markers. A reserved indexed PFFS extent
+supports reordering and 16+4 FEC across the full 1,408 KiB region. A pending
+reception locks PFFS across timeouts until matching repair or `ir_file_abort`;
+reboot discards unpublished progress. Existing catalogs are never autoformatted.
+The native sender/receiver/NOR tests cover full capacity, FEC, empty/tail files,
+source binding, abort/reboot, default conflicts, replacement, failed erase/write/
+publish, CRC faults and malformed packets. Existing firmware upload, remote and
+full/minimal PFFS/console tests pass. Serial/radio timing and runtime stack peaks
+remain unmeasured; all device behavior still needs hardware validation.
+The robot build is 94,588 bytes (3,716 bytes left in its 96 KiB slot), static
+SRAM is 113,992 bytes and the stack/runtime gap is 17,080 bytes. Remote firmware
+is 79,164 bytes with 92,680 bytes static SRAM and a 38,392-byte runtime gap.
+Both builds use LTO. All 18 existing PC uploader tests and API fault checks pass.
+
 ## Current decisions
 
 - Measure coded and uncoded timing and completion on hardware before changing
@@ -303,6 +322,9 @@ decoder and LED changes still need a hardware trial.
    then verify the reported version and repeat the upload and flash tests.
 6. Validate the refreshed installer images on hardware, including PFFS UART
    operations, persistence across reboot/firmware upload, and IR upload timing.
-7. Upload two raw SDK controller binaries to PFFS, select each with `load` and
+7. Broadcast files from a robot and each remote type, including same-name
+   replacement, interrupted/resumed transfer, explicit abort and loading a
+   received controller. Record range, losses, receiver completion and stack use.
+8. Upload two raw SDK controller binaries to PFFS, select each with `load` and
    `run`, then verify file CRCs and selection again after reboot. Check a failed
    installation remains unbootable until a successful retry.

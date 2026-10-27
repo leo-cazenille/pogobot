@@ -21,7 +21,7 @@
   v3 programming binaries, scripts, checksums, and release validation status.
 
 - [PFFS file commands](../Software/readme.md#pffs-file-commands): BIOS file
-  management, UART transfers, saved controller loading, flash layout and
+  management, UART and one-way IR file transfers, saved controller loading, flash layout and
   persistence limits;
   [shared pogolib core](../Software/pogolib/pffs/README.md) and
   [BIOS adapter](../Software/pogobios/pffs/README.md).

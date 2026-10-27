@@ -27,3 +27,20 @@ The local LiteX readers retain their original notices and add bounded 160-byte
 input plus file-service hooks. Completion uses the same header. Native NOR,
 protocol and full/minimal console tests compile the canonical pogolib sources.
 See [PFFS file commands](../../readme.md#pffs-file-commands) for usage.
+
+`ir_file.c` sends stored files using a private user-packet command range
+0x15..0x19. The shared decoder and GF tables live in `../ir_boot.c`; firmware
+uploads retain their original packet type and command range. File START derives
+its destination exclusively from checked PFFS allocation. Private indexed writer
+helpers in pogolib erase the reserved extent and publish its padded-page CRC
+through the existing catalog writer. The public sequential writer API and v4
+layout are unchanged. The BIOS excludes UART writers/firmware updates while an
+IR file is pending, including after timeout. `ir_file_abort` releases that lock.
+Native tests run the actual sender/receiver against strict NOR, including the
+full 1,408 KiB region, loss/FEC, source binding, restart and replacement faults.
+
+Preparation STARTs carry a bounded fresh-attempt flag for the first three
+copies; later keepalives cannot repeatedly erase a failed destination. This
+transport flag is excluded from the stable metadata hash and resume identity.
+Matching completed transfers are consumed before re-entering the receive loop,
+so successful robots remain usable during other receivers' repair passes.

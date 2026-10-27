@@ -49,6 +49,14 @@ can format unformatted/corrupt catalogs: check `pogo_flash_file_check()` first
 when preserving data. Operations require serialized access; writes and defrag
 are not power-failure atomic. BIOS commands require explicit `format YES`.
 
+PFFS-enabled BIOS also offers `ir_send_file <id|name> [passes] [--replace]`
+on robots and `rc_send_file` on remotes. These broadcast a stored ordinary file
+into neighboring robots' PFFS with 16+4 parity, without a PC data stream or
+receiver acknowledgements. Receivers need the updated BIOS; `load`/`run` remain
+separate. Replacement keeps the receiver's ID and requires the same format and
+allocated page count. Pending reception reserves storage until completion or
+UART `ir_file_abort`. Existing application function signatures are unchanged.
+
 Please visit : https://github.com/nekonaute/pogobot-sdk or https://github.com/nekonaute/pogobot
 
 Requirements

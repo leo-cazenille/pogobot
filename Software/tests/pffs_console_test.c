@@ -46,6 +46,15 @@ uint8_t flash_invalidate_user_image(void) {
     return 1;
 }
 void ir_boot_reset_v2_upload(void) { ++ir_resets; }
+/* File-radio transport is covered by the real IR receiver/sender harness.
+ * These doubles keep console-only fixtures independent of radio timing. */
+static bool radio_pending;
+bool ir_file_busy(void) { return radio_pending; }
+void ir_file_abort(void) { radio_pending = false; }
+bool ir_file_send(uint8_t id, unsigned passes, bool replace, uint8_t *scratch) {
+    (void)id; (void)passes; (void)replace; (void)scratch;
+    return false;
+}
 void erase_flash_sector(unsigned address) {
     assert(address >= POGOBIOS_CONTROLLER_OFFSET &&
            address + SPIFLASH_SECTOR_SIZE <=
@@ -414,6 +423,17 @@ static void selftest(void) {
     assert(!bios_pffs_busy());
     for (unsigned i = 0; i < POGOBOT_USER_FLASH_START_OFFSET; ++i)
         assert(flash[i] == 0xa5);
+    /* A timed-out radio reservation continues to exclude UART writers and
+     * controller installation until the explicit local abort releases it. */
+    radio_pending = true;
+    before = erases;
+    assert(bios_pffs_busy());
+    command("format YES", true);
+    command("serialboot", true);
+    command("load 2", true);
+    assert(erases == before && dangerous_calls == 1u && bios_pffs_busy());
+    command("ir_file_abort", true);
+    assert(!bios_pffs_busy());
     controller_selftest();
     puts("PFFS BIOS console/NOR integration: PASS");
 }
