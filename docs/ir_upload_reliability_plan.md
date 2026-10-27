@@ -114,6 +114,13 @@ serialize flash access and defer IR upload entry; retry firmware uploads after
 those operations finish. NOR, console and all 19 file-transfer host tests pass.
 PFFS hardware operations and IR timing with these images await robot testing.
 
+PFFS sharing follow-up (2026-10-27): source commit
+`7e176a3826ee4f3c2f50c1c2c9d19d7b28a086a8` moves file/log APIs into pogolib.
+Pogobios and applications link the same core; pogo-utils consumes the SDK implementation.
+The refreshed installer keeps the same binary sizes, and the SDK now exposes
+PFFS publicly and ships portable sources. Upload wire format and phase hashes
+remain unchanged. Hardware validation is still pending.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,

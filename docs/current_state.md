@@ -227,7 +227,14 @@ hardware and the simulator. Existing IR/API fault suites pass. PFFS hardware
 behavior and persistence across reboot/firmware upload remain unvalidated.
 The earlier LTO installer worked on one user-tested robot. The shared-core
 robot build remains 86,732 bytes, with no new application runtime dependency
-on the BIOS. Installer and SDK refresh follows the source commit.
+on the BIOS. The installer and separate SDK archive are refreshed from source
+commit `7e176a3826ee4f3c2f50c1c2c9d19d7b28a086a8`. Package checksums, slot bounds,
+bootloader embedding and mock programmer success/failure checks pass. Robot static SRAM
+remains 103,240 bytes (27,832 bytes left for stack/runtime); remote static SRAM
+remains 89,088 bytes. All 32 packaged SDK examples build, and unused PFFS
+code is absent from the raw-flash example. The standalone SDK is committed as
+`cdaf6b0` on `sdk_2_7_1`; pogo-utils integration is `1cc1d26` on `dev`.
+PFFS hardware operations still need validation.
 
 ## Current decisions
 
@@ -247,7 +254,7 @@ on the BIOS. Installer and SDK refresh follows the source commit.
 - Target v3 heads with 2 MiB flash only; the user page API may use all
   physical flash from `0x90000` through `0x1fffff`.
 - Keep the API v2.7.1 installer limited to programming artifacts; distribute
-  the 111 MiB uncompressed SDK as a separate archive.
+  the SDK as a separate archive.
 
 ## Data limitations
 

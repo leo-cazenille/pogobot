@@ -16,7 +16,7 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `4aee02661ca595080b1c39a37dbad294b41f546e` using the existing
+source commit `7e176a3826ee4f3c2f50c1c2c9d19d7b28a086a8` using the existing
 gateware. LTO, function/data sections, and linker garbage collection keep
 robot and bootloader Pogobios at 86,732 bytes and remote Pogobios at 75,572
 bytes, including PFFS v4. All previous commands remain, plus 18 filesystem and
@@ -50,8 +50,11 @@ seconds; defrag runs until completion or a reported error.
 - `SHA256SUMS`: checksums for the two scripts and five binaries.
 
 The matching SDK is packaged separately as `../sdk_APIv2.7.1.tar.gz`, with its
-own `../sdk_APIv2.7.1.tar.gz.sha256` checksum file. That SDK remains compatible
-and is unchanged by this firmware optimization refresh.
+own `../sdk_APIv2.7.1.tar.gz.sha256` checksum file. The refreshed SDK includes
+PFFS v4 file/log declarations, the complete implementation in `libpogobot.a`,
+portable `src/pffs` sources for native builds, and the UART transfer client.
+The matching standalone SDK commit is `cdaf6b0` (`sdk_2_7_1`); pogo-utils
+uses it from commit `1cc1d26` (`dev`).
 
 ## Program a device
 
@@ -113,7 +116,7 @@ uploads still need a hardware trial.
 The production C receiver, cable loader, remote forwarder, and library API
 tests pass with address and undefined-behavior sanitizers configured to stop
 on errors. All 18 Python upload tests pass. A clean SDK package compiled all
-32 examples; its library retains the same 163 exported symbols. The standalone
+32 examples; its library retains all 163 prior exported symbols. The standalone
 SDK's integrity and flash-page examples also cross-build. The current release
 fixes await hardware validation.
 
@@ -126,7 +129,12 @@ with these optimized installer images still need hardware validation.
 The PFFS NOR file/log tests, full and minimal BIOS console integration tests,
 and all 19 host-client transfer tests pass with LTO and fatal sanitizers. They
 cover CRC faults, retries, interrupted writes, malformed/overlong commands,
-partial-input timeouts and file-session isolation. The 163 library exports
-are preserved; filesystem support is private to the BIOS. The earlier LTO
-installer worked on one user-tested robot. PFFS hardware operations and
+partial-input timeouts and file-session isolation. The 163 prior library exports
+are preserved; the archive now has 206 symbols, including all 35 public PFFS
+file/log functions. Pogobios and applications link the same maintained pogolib
+core. Existing pogo-utils headers forward to the SDK declarations, and native
+pogo-utils builds compile the SDK sources with its explicit simulator backend.
+All PFFS entry points link in SDK-only applications both normally and with
+`-fno-lto`. The v4 storage layout and existing function signatures are unchanged.
+The earlier LTO installer worked on one user-tested robot. PFFS hardware operations and
 persistence across reboot and firmware upload still need robot validation.

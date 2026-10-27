@@ -59,7 +59,9 @@ sdk: $(POGOLIB_BUILDDIR)/libpogobot.a
 	cp $(POGOLIB_BUILDDIR)/libpogobot.a $(BUILD_SDK_DIR)/libs
 	cp $(BUILD_POGO_DIR)/software/libcompiler_rt/libcompiler_rt.a $(BUILD_SDK_DIR)/libs
 	cp $(BUILD_POGO_DIR)/software/libc/libc.a $(BUILD_SDK_DIR)/libs
-	cp -r ../example $(BUILD_SDK_DIR)/examples
+	# Copy contents so repeated SDK generation does not nest examples/example.
+	mkdir -p $(BUILD_SDK_DIR)/examples
+	cp -r ../example/. $(BUILD_SDK_DIR)/examples/
 	find $(BUILD_SDK_DIR)/examples -maxdepth 1 -mindepth 1 -type d -exec sed -i 's/POGO_SDK=..\/..\/sdk\/build_sdk/POGO_SDK=..\/../g' {}/Makefile \;
 	find $(BUILD_SDK_DIR)/examples -maxdepth 1 -mindepth 1 -type d -exec sed -i 's/POGO_VAR=..*/POGO_VAR=$$(POGO_SDK_TOOLS)/g' {}/Makefile \;
 	make -C $(BUILD_SDK_DIR)/examples/ clean
