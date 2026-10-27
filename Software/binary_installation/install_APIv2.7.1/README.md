@@ -16,11 +16,11 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `7e176a3826ee4f3c2f50c1c2c9d19d7b28a086a8` using the existing
+source commit `c237ffd8611059a1b02b198482553d423dd8725f` using the existing
 gateware. LTO, function/data sections, and linker garbage collection keep
-robot and bootloader Pogobios at 86,732 bytes and remote Pogobios at 75,572
-bytes, including PFFS v4. All previous commands remain, plus 18 filesystem and
-UART protocol handlers (74 robot and 75 remote commands in total).
+robot and bootloader Pogobios at 88,100 bytes and remote Pogobios at 75,572
+bytes, including PFFS v4. Robot BIOS adds 19 filesystem/UART handlers; remote
+BIOS has 18. Each has 75 commands in total. The new `load` command is robot-only.
 
 This build fixes the eight release-review findings while preserving the public
 C API. Serial frames and IR payloads are checked before copying. Application
@@ -40,6 +40,17 @@ UART-connected device; a Pogoshower connection manages the controller's files,
 not files on robots over IR. During a file transfer or defrag, other commands
 and IR upload entry are blocked. Inactive UART sessions time out after 30
 seconds; defrag runs until completion or a reported error.
+
+The robot-only command `load <id|name>` installs a raw SDK `firmware.bin`
+stored in PFFS, just as a completed `serialboot` would. It leaves the prompt
+available; execute `run` to start it. The source file remains intact. File CRCs
+are checked before the previous image is invalidated, and page readback plus
+the whole installed CRC gate the completion marker. Files must be 4..131072
+bytes; ELF, PFT1 envelopes and logs are refused. No gateware, bootloader or PFFS
+sectors are erased. An interrupted installation can be retried from `Pogoboot>`.
+The loader adds 1,368 bytes to robot firmware and reuses the shared page cache.
+Robot static SRAM is 104,608 bytes, leaving a 26,464-byte stack/runtime gap.
+The shared SDK API and the existing SDK package are unchanged by this command.
 
 ## Contents
 
@@ -98,7 +109,7 @@ file paths, offsets, marker contents, cleanup, and programmer-failure handling.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-86,732-byte Pogobios at offset
+88,100-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -138,3 +149,9 @@ All PFFS entry points link in SDK-only applications both normally and with
 `-fno-lto`. The v4 storage layout and existing function signatures are unchanged.
 The earlier LTO installer worked on one user-tested robot. PFFS hardware operations and
 persistence across reboot and firmware upload still need robot validation.
+
+Controller-install tests pass in the full/minimal consoles with fatal
+ASan/UBSan and LTO. They cover source/catalog CRC failure, bounds up to 128 KiB,
+partial pages, UART/transfer isolation, protected flash regions, failed erases,
+page/marker writes, source changes, late corruption and successful retry. Launch
+and persistence on a real robot remain unvalidated.

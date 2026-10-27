@@ -121,6 +121,14 @@ The refreshed installer keeps the same binary sizes, and the SDK now exposes
 PFFS publicly and ships portable sources. Upload wire format and phase hashes
 remain unchanged. Hardware validation is still pending.
 
+Saved-controller follow-up (2026-10-27): source commit
+`c237ffd8611059a1b02b198482553d423dd8725f` adds robot BIOS `load <id|name>` for raw PFFS
+firmware. It resets cached IR progress when installation begins and follows the
+same invalid/partial/verified marker policy. The installer is refreshed with
+88,100-byte robot and embedded bootloader firmware. IR phase hashes and wire
+format are unchanged. Controller loading and IR timing still need hardware
+validation; native controller fault injection passes.
+
 ## Objective
 
 Make uploads of 50–60 KiB firmware reliable through a Pogowall or Pogoshower,

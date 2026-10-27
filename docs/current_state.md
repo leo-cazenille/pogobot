@@ -247,8 +247,13 @@ UART-only and is excluded on remotes. Full/minimal console tests cover sizes,
 CRC rejection, guard regions, transfer isolation, injected erase/program/read
 faults and retry. Robot Pogobios is 88,100 bytes (+1,368), with 104,608 bytes
 static SRAM and a 26,464-byte stack/runtime gap. No extra page cache is added;
-remote firmware stays 75,572 bytes. Robot and remote cross-builds pass; hardware
-launch and reboot persistence still need verification.
+remote firmware stays 75,572 bytes. Source commit `c237ffd` implements the
+command. The installer refresh includes normal and embedded bootloader BIOS;
+all three release cross-builds, checksums, slot/embedding checks and mock
+programmer success/failure checks pass. The standalone SDK/API remains
+unchanged. Native PFFS/console, 19 UART-client
+cases and the IR/API fault suites pass. Hardware launch and reboot persistence
+still need verification.
 
 ## Current decisions
 
