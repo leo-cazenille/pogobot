@@ -308,8 +308,15 @@ Only this bounded boot action accepts IR; file management and the separate
 `load` command remain UART-only, with UART/IR file-session locks unchanged.
 Native full/minimal console tests cover successful IR starts, numeric labels,
 missing/corrupt files, program failure, retry, bounds and session isolation.
-Release cross-builds and installer refresh are in progress; hardware behavior
-remains unvalidated.
+Release source `83d0da87c3c85085a5470417e45df140b909a9bb` cross-builds for all
+three roles. Robot/embedded BIOS is 93,036 bytes (+664), with 112,400 bytes
+static SRAM and an 18,672-byte runtime gap. Remote BIOS is 77,172 bytes (+320),
+with 90,656 bytes static SRAM and a 40,416-byte runtime gap. Command tables add
+only the appropriate load_run/rc_load_run entry, retain other commands and omit
+defrag. All 19 UART-client cases pass. Installer images/checksums are refreshed;
+slot bounds, bootloader embedding and mock programmer paths pass. SDK/library
+artifacts remain unchanged. IR delivery, visible LEDs and actual launch remain
+unvalidated on hardware.
 
 ## Current decisions
 

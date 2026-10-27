@@ -16,12 +16,12 @@ LOAD/JUMP/ABORT broadcasts, and the remote no longer forwards legacy
 programming frames. Use the current SDK terminal with `rc_flash_robot`.
 
 The current robot, bootloader, and remote software images were rebuilt from
-source commit `22eab5a009843491a2a9ecde65956777b66b0b2e` using the existing
+source commit `83d0da87c3c85085a5470417e45df140b909a9bb` using the existing
 gateware. LTO, function/data sections, and linker garbage collection keep
-robot and bootloader Pogobios at 92,372 bytes and remote Pogobios at 76,852
-bytes, including PFFS v4 and IR file transfer. Robot BIOS has 76 commands
-(including 20 filesystem/transfer handlers); remote BIOS has 75 (18 such
-handlers). The `load` and `ir_file_abort` commands are robot-only.
+robot and bootloader Pogobios at 93,036 bytes and remote Pogobios at 77,172
+bytes, including PFFS v4 and IR file transfer. Robot BIOS has 77 commands
+(including 21 filesystem/transfer handlers); remote BIOS has 76 (18 such
+handlers plus the remote controller-start command). The `load`, `load_run` and `ir_file_abort` commands are robot-only.
 
 This build fixes the eight release-review findings while preserving the public
 C API. Serial frames and IR payloads are checked before copying. Application
@@ -54,9 +54,26 @@ the whole installed CRC gate the completion marker. Files must be 4..131072
 bytes; ELF, PFT1 envelopes and logs are refused. No gateware, bootloader or PFFS
 sectors are erased. An interrupted installation can be retried from `Pogoboot>`.
 The loader adds 1,368 bytes to robot firmware and reuses the shared page cache.
-With IR file support included, robot static SRAM is 111,736 bytes, leaving
-a 19,336-byte stack/runtime gap. Peak stack use still needs hardware measurement.
+With IR file support included, robot static SRAM is 112,400 bytes, leaving
+a 18,672-byte stack/runtime gap. Peak stack use still needs hardware measurement.
 The shared public SDK API is unchanged.
+
+## Start a named saved controller on robots
+
+Use `rc_load_run <name>` at the remote prompt. Like `rc_start`, it repeats
+every 200 ms until a key is pressed. The file must already be stored in each
+robot's PFFS; no remote copy is required. Receiving robots must be idle at a
+BIOS prompt, without an active file session. Names are exact, including numeric
+labels, and contain 1..32 printable ASCII bytes without spaces.
+
+The robot boot action `load_run <name>` verifies and installs the raw controller,
+then selects user image 1 only on success. Missing/invalid files or failed
+installation show a red LED/idle blink and never start an older image as a
+fallback. The normal command LED refresh preserves this red indication; another
+BIOS command can restore the marker color. Existing `load` remains UART-only
+and does not start automatically. No acknowledgements are added. Both remote
+and robot images, including the robot's combined bootloader, need this update.
+See [named controller start](../../../readme-irRemote.md#start-a-controller-stored-in-pffs).
 
 ## Broadcast a saved file over IR
 
@@ -139,7 +156,7 @@ file paths, offsets, marker contents, cleanup, and programmer-failure handling.
 The normal robot Pogobios was rebuilt with `make software`; the bootloader
 image was rebuilt from the existing gateware with `--bootloader` so `Pogoboot>`
 uses the same retry and LED behavior. Its combined image contains a
-92,372-byte Pogobios at offset
+93,036-byte Pogobios at offset
 `0x20000` and fits the `0x00000–0x3ffff` bootloader slot. After `rc_erase`,
 the LED is blue. The first v2 data write stores a partial marker at `0x88010`,
 so an incomplete upload blinks orange; a verified image blinks green. During
@@ -195,11 +212,21 @@ locking and publication rules. All 16 pogo-utils host tests pass against the
 refreshed portable SDK core. File-radio timing, range, replacement behavior and
 peak stack use remain unvalidated on hardware.
 
-The BIOS-only defragmentation removal retains every other command, the original
-1,024-byte CRC-16 table, and the full terminal. Normal and embedded robot BIOS
-are 92,372 bytes; the remote is 76,852 bytes. Native file/log compaction tests
+Defragmentation remains excluded. The current build retains every previous
+non-defrag command, the original 1,024-byte CRC-16 table, and the full terminal. Normal and embedded robot BIOS
+are 93,036 bytes; the remote is 77,172 bytes. Native file/log compaction tests
 and full/minimal BIOS console tests pass, including rejection of the removed
 command without flash changes. All 19 UART-client tests pass. The pogo-utils
 `flash_file` example cross-build retains `defrag YES` and the linked shared
 compaction implementation; its NOR file/log tests pass. The SDK package and
 public library API are unchanged. Hardware validation remains pending.
+
+Named controller-start tests pass in the full/minimal BIOS consoles under LTO
+and fatal ASan/UBSan. They cover successful IR dispatch and verified reboot,
+missing and numeric names, name bounds, corrupt source data, failed programming,
+retry, and exclusion during UART or pending IR file reception. Lookup failures
+leave the previous flash image unchanged, set red and never request a reboot.
+Normal and embedded robot BIOS are 93,036 bytes (+664); remote BIOS is 77,172
+bytes (+320). Package checksums, slot bounds, bootloader embedding and mock
+programmer success/failure checks pass. The SDK/API is unchanged. IR delivery,
+visible LED behavior and actual controller launch still need hardware validation.
