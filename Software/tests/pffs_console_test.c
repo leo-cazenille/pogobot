@@ -49,6 +49,14 @@ void ir_boot_reset_v2_upload(void) { ++ir_resets; }
 /* File-radio transport is covered by the real IR receiver/sender harness.
  * These doubles keep console-only fixtures independent of radio timing. */
 static bool radio_pending;
+static unsigned controller_starts;
+static uint8_t led_color[3], blink_color[3];
+/* A boot request is observable only after the production installer has
+ * committed its marker. Tests continue instead of resetting the CPU. */
+void reboot_ctrl_write(uint32_t value) {
+    assert(value == 0xadu && check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    ++controller_starts;
+}
 bool ir_file_busy(void) { return radio_pending; }
 void ir_file_abort(void) { radio_pending = false; }
 bool ir_file_send(uint8_t id, unsigned passes, bool replace, uint8_t *scratch) {
@@ -110,9 +118,10 @@ void read_page_flash(uint16_t page, char *data) {
 }
 uint16_t pogobot_helper_getid(void) { return 42; }
 void pogobot_led_setColor(uint8_t r, uint8_t g, uint8_t b) {
-    (void)r;
-    (void)g;
-    (void)b;
+    led_color[0] = r; led_color[1] = g; led_color[2] = b;
+}
+void rgb_blink_set_color(uint8_t r, uint8_t g, uint8_t b) {
+    blink_color[0] = r; blink_color[1] = g; blink_color[2] = b;
 }
 void rgb_blink(void) {}
 void pogobot_stopwatch_reset(time_reference_t *t) { t->origin = now_us; }
@@ -305,6 +314,61 @@ static void controller_selftest(void) {
     puts("PFFS controller install/fault injection: PASS");
 }
 
+static void expect_start_failed(const char *line) {
+    unsigned starts = controller_starts;
+    expect_load_rejected(line, false);
+    assert(controller_starts == starts);
+    assert(led_color[0] == 50 && led_color[1] == 0 && led_color[2] == 0);
+    assert(memcmp(led_color, blink_color, sizeof(led_color)) == 0);
+}
+
+/* Exercise the actual IR-enabled dispatcher and loader together, including
+ * exact name lookup and refusal to boot an older image after a failure. */
+static void controller_start_selftest(void) {
+    char longest[POGO_FLASH_FILE_MAX_NAME + 1u];
+    memset(longest, 'x', sizeof(longest) - 1u);
+    longest[sizeof(longest) - 1u] = '\0';
+    assert(bios_pffs_controller_name_valid(longest));
+    assert(!bios_pffs_controller_name_valid(NULL));
+    assert(!bios_pffs_controller_name_valid(""));
+    assert(!bios_pffs_controller_name_valid("two words"));
+    assert(!bios_pffs_controller_name_valid("line\nbreak"));
+    assert(pogo_flash_file_format() == POGO_FLASH_FILE_OK);
+    bios_pffs_init();
+    seed_old_controller();
+    controller_image[0] = 0x6f;
+    assert(pogo_flash_file_create_bytes(7, "controller", 513u, 1u,
+                                       controller_image) == POGO_FLASH_FILE_OK);
+    expect_start_failed("load_run missing");
+    expect_start_failed("load_run 7"); /* ID 7 exists, but this name does not. */
+    expect_start_failed("load_run");
+    expect_start_failed("load_run controller extra");
+    expect_start_failed("load_run abcdefghijklmnopqrstuvwxyz1234567");
+    command("load_run controller", false);
+    assert(controller_starts == 1u);
+    assert(memcmp(flash + POGOBIOS_CONTROLLER_OFFSET, controller_image, 513u) == 0);
+    /* A numeric name must select its named file, not the different ID 7. */
+    assert(pogo_flash_file_create_bytes(8, "7", 257u, 1u,
+                                       controller_image) == POGO_FLASH_FILE_OK);
+    unsigned written = controller_programs;
+    command("load_run 7", false);
+    assert(controller_starts == 2u && controller_programs == written + 2u);
+    pogo_flash_file_info_t info;
+    assert(pogo_flash_file_find(7, &info) == POGO_FLASH_FILE_OK);
+    uint32_t source = POGOBOT_USER_FLASH_START_OFFSET + info.first_page * 256u;
+    flash[source + 3u] ^= 1u;
+    expect_start_failed("load_run controller");
+    flash[source + 3u] ^= 1u;
+    failed_program_address = POGOBIOS_CONTROLLER_OFFSET;
+    command("load_run controller", false);
+    assert(controller_starts == 2u && !check_flash_state(FLASH_IS_OK, FLASH_OK_OFFSET));
+    assert(led_color[0] == 50u && blink_color[0] == 50u);
+    failed_program_address = UINT32_MAX;
+    command("load_run controller", false);
+    assert(controller_starts == 3u);
+    puts("PFFS named IR controller start/fault injection: PASS");
+}
+
 static void selftest(void) {
     uint8_t page[256];
     pogo_flash_file_info_t info;
@@ -390,6 +454,8 @@ static void selftest(void) {
      * The editor must discard the partial prefix AND its later tail. */
     command("put 12345678 10 binary 48 00000000 raw", true);
     assert(bios_pffs_busy());
+    command("load_run binary", false);
+    assert(controller_starts == 0u && bios_pffs_busy());
     command("serialboot", true);
     assert(dangerous_calls == 1);
     command("format YES", true);
@@ -432,10 +498,13 @@ static void selftest(void) {
     command("format YES", true);
     command("serialboot", true);
     command("load 2", true);
+    command("load_run later", false);
+    assert(controller_starts == 0u);
     assert(erases == before && dangerous_calls == 1u && bios_pffs_busy());
     command("ir_file_abort", true);
     assert(!bios_pffs_busy());
     controller_selftest();
+    controller_start_selftest();
     puts("PFFS BIOS console/NOR integration: PASS");
 }
 

@@ -32,6 +32,14 @@ Defragmentation remains in pogolib for maintenance applications such as
 `pogo-utils/examples/flash_file`; its command and service state are omitted
 from Pogobios. Files still require contiguous extents when allocated.
 
+The robot boot action `load_run <name>` is the narrow IR exception: it uses
+exact name lookup, the existing verified controller installer and the same
+session locks, then selects user image 1 only on success. Missing/invalid files
+or installation faults show red without booting an older image. The normal
+marker LED refresh skips this action so it cannot mask the red result. Remote
+`rc_load_run <name>` reuses rc_start's 200 ms broadcasts and key cancellation;
+ordinary file management and `load` remain UART-only.
+
 `ir_file.c` sends stored files using a private user-packet command range
 0x15..0x19. The shared decoder and GF tables live in `../ir_boot.c`; firmware
 uploads retain their original packet type and command range. File START derives

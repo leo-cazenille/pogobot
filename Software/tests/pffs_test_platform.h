@@ -25,6 +25,8 @@ void erase_write_section_flash(void);
 int spiBeginErase4(uint32_t);
 uint16_t pogobot_helper_getid(void);
 void pogobot_led_setColor(uint8_t, uint8_t, uint8_t);
+void rgb_blink_set_color(uint8_t, uint8_t, uint8_t);
+void reboot_ctrl_write(uint32_t);
 void rgb_blink(void);
 void pogobot_stopwatch_reset(time_reference_t *);
 int32_t pogobot_stopwatch_get_elapsed_microseconds(time_reference_t *);

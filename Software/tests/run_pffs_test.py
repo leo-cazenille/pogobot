@@ -13,7 +13,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pogobios-pffs-test-") as name:
         temp = Path(name)
         for header in ("pogobot.h", "spi.h", "uart.h", "sfl.h",
-                       "generated/mem.h", "generated/soc.h", "libbase/spiflash.h"):
+                       "generated/mem.h", "generated/soc.h", "generated/csr.h",
+                       "libbase/spiflash.h"):
             path = temp / header
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f'#include "{tests / "pffs_test_platform.h"}"\n')

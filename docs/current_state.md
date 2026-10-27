@@ -300,6 +300,17 @@ embedding and mock programmer success/failure checks pass. SDK artifacts remain
 unchanged. Hardware validation is pending. Fragmentation can require running
 the maintenance application before allocating a large file.
 
+Remote `rc_load_run <name>` now repeats the robot boot action `load_run` at
+200 ms until a key is pressed. Robots use exact name lookup and the verified
+PFFS installer, then reboot to user image 1 only on success. Failure shows red
+without booting an older image. Normal marker LED refresh preserves this result.
+Only this bounded boot action accepts IR; file management and the separate
+`load` command remain UART-only, with UART/IR file-session locks unchanged.
+Native full/minimal console tests cover successful IR starts, numeric labels,
+missing/corrupt files, program failure, retry, bounds and session isolation.
+Release cross-builds and installer refresh are in progress; hardware behavior
+remains unvalidated.
+
 ## Current decisions
 
 - Measure coded and uncoded timing and completion on hardware before changing

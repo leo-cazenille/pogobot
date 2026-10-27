@@ -487,7 +487,7 @@ Pogobios on v3 robots includes PFFS v4 file management at both `Pogoboot>`
 and `Pogobot>`. The remote console also supports these UART commands. Run
 `pffs` for filesystem help, or `help` for the complete BIOS command list.
 The filesystem is never formatted automatically by booting or by these commands.
-Commands act on the UART-connected device. Connecting to a Pogoshower manages
+File management commands act on the UART-connected device. Connecting to a Pogoshower manages
 the controller's own files; robot file transfers require the robot's UART and
 are not forwarded over IR.
 
@@ -498,6 +498,7 @@ are not forwarded over IR.
 | `stat <id\|name>` | Display metadata and log committed length. |
 | `cat <id\|name>` | Hex-dump an ordinary file; display a log with binary bytes escaped. |
 | `load <id\|name>` | On robots, install a raw controller binary in the application slot; then use `run`. |
+| `load_run <name>` | On robots, install and start a named controller; accepts UART or IR, red on failure. |
 | `touch <id> <name\|-> [bytes]` | Create an ordinary file; default length is zero. |
 | `write <id\|name> <offset> <hexbytes>` | Edit a one-page ordinary file, extending its length if needed. |
 | `mv <id\|name> <new_name\|->` | Change the optional name without changing the ID. |
@@ -550,8 +551,16 @@ accepts up to 159 input characters and rejects an overlong command in full.
 UART transfers own the filesystem until completion or timeout.
 Other console commands are rejected during those transfers; IR messages are
 drained without entering a firmware upload. Start or retry `rc_flash_robot`
-after the file operation finishes. Filesystem commands themselves are UART-only.
+after the file operation finishes. File management commands themselves are UART-only.
 Console history and completion remain available in the full terminal build.
+
+To start a controller already stored on neighboring robots, the remote command
+`rc_load_run <name>` repeats the bounded robot boot action `load_run <name>`
+every 200 ms until a key is pressed. It resolves an exact filename, verifies
+and installs the controller, and reboots only on success. A missing/invalid
+file or failed install shows a red LED/idle blink; it never starts an older
+image as a fallback. Receiving robots must be idle at the BIOS prompt. The
+remote needs no copy of the file. See the [remote guide](../readme-irRemote.md#start-a-controller-stored-in-pffs).
 
 To keep several controllers in PFFS and select one later, first upload the
 SDK-built `firmware.bin` as an ordinary raw file. From `Software/`, with the
