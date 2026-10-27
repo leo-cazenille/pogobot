@@ -557,8 +557,12 @@ static void shell_execute(char **words, unsigned count) {
              "can lose data.");
         puts("Ordinary cat is hex; log bytes are text with binary escaped.");
         puts("write supports one-page ordinary files only.");
-        puts("ir_send_file / rc_send_file <id|name> [passes] [--replace]; Q cancels");
+#ifdef REMOCON
+        puts("rc_send_file <id|name> [passes] [--replace]; Q cancels");
+#else
+        puts("ir_send_file <id|name> [passes] [--replace]; Q cancels");
         puts("ir_file_abort releases a pending IR reception; partial replacement can lose data.");
+#endif
         return;
     }
     if (strcmp(command, "ls") == 0 && count == 1u) {
