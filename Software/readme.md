@@ -481,3 +481,74 @@ Note : Egg-link : fill used by setuptools when a Python package is installed and
 
 Suppress egg-info files using (on Ubuntu):
 rm -f ~/.local/lib/python*/site-packages/*-link .
+## PFFS file commands
+
+Pogobios on v3 robots includes PFFS v4 file management at both `Pogoboot>`
+and `Pogobot>`. The remote console also supports these UART commands. Run
+`pffs` for filesystem help, or `help` for the complete BIOS command list.
+The filesystem is never formatted automatically by booting or by these commands.
+Commands act on the UART-connected device. Connecting to a Pogoshower manages
+the controller's own files; robot file transfers require the robot's UART and
+are not forwarded over IR.
+
+| Command | Action |
+| --- | --- |
+| `ls` | List files and validate catalog, ordinary-file and log CRCs. |
+| `df` | Show allocated sectors, free capacity and file-ID usage. |
+| `stat <id\|name>` | Display metadata and log committed length. |
+| `cat <id\|name>` | Hex-dump an ordinary file; display a log with binary bytes escaped. |
+| `touch <id> <name\|-> [bytes]` | Create an ordinary file; default length is zero. |
+| `write <id\|name> <offset> <hexbytes>` | Edit a one-page ordinary file, extending its length if needed. |
+| `mv <id\|name> <new_name\|->` | Change the optional name without changing the ID. |
+| `rm <id\|name>` | Remove the catalog entry. |
+| `format YES` | Explicitly delete all PFFS files, including calibration files. |
+| `defrag YES` | Compact file extents one page per service step. |
+
+For example, on an already formatted filesystem:
+
+```text
+touch 42 notes
+write notes 0 4869
+cat notes
+stat 42
+```
+
+IDs are 1–80; names are case-sensitive and up to 32 bytes without spaces.
+The existing 5888-page user-flash region is unchanged. PFFS reserves 64 KiB
+at physical `0x90000–0x9FFFF` for catalogs and uses the following 1408 KiB
+at `0xA0000–0x1FFFFF` for file extents. Raw page writes by an application can
+still overwrite this filesystem; applications sharing it must use the same
+PFFS v4 layout. User programs continue to link their own filesystem code,
+for example from `pogo-utils`; the BIOS does not provide runtime system calls.
+
+Close the serial terminal before using the host transfer tool, then run these
+commands from `Software/`. The robot must be at its Pogobios prompt:
+
+```sh
+python3 pffs_transfer.py --port /dev/ttyUSB0 upload record.bin --id 10 --name record
+python3 pffs_transfer.py --port /dev/ttyUSB0 download record received.bin
+```
+
+The same commands work with `pogo-utils/tools/pffs_transfer.py`. Raw upload
+is the default and catalogs retain the exact file length. `--envelope` adds
+an optional PFT1 header. Replacing an existing file requires `--replace`, a
+matching ID/name/type and an unchanged allocated page count. The protocol uses
+48-byte chunks with CRCs, acknowledgements and retries. A disconnected session
+expires after 30 seconds, even with an unfinished console line. The BIOS
+accepts up to 159 input characters and rejects an overlong command in full.
+
+UART transfers and defrag own the filesystem until completion or timeout.
+Other console commands are rejected during those operations; IR messages are
+drained without entering a firmware upload. Start or retry `rc_flash_robot`
+after the file operation finishes. Filesystem commands themselves are UART-only.
+Console history and completion remain available in the full terminal build.
+
+Catalog changes, replacements and overlapping defrag moves are not power-loss
+atomic. Keep power connected and back up important data before those operations.
+`format YES` invalidates catalogs rather than securely wiping payload bytes.
+Corrupt or older catalogs are rejected without automatic migration or erasure.
+
+Host verification runs `python3 tests/run_pffs_test.py` from `Software/`.
+It uses production code with strict NOR flash and UART test doubles, fatal
+address/undefined-behavior sanitizers and LTO. Hardware upload timing and peak
+stack use need validation on a robot.

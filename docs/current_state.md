@@ -24,6 +24,8 @@ snapshot, including local changes.
   IR send bounds and FIFO backpressure, security-register writes, and timers.
 - Pogobios size attribution, LTO and section collection, command retention,
   and application linking against the full fat-object library archive.
+- PFFS v4 sources and UART shell from `pogo-utils` revision `ac6d558`,
+  hardware erase selection, console limits, session isolation and NOR fault tests.
 
 ## Understood
 
@@ -206,6 +208,21 @@ bootloader with the 62,228-byte firmware at offset `0x20000`. All seven package
 checksums, slot bounds, embedded bytes, and simulated programmer success/failure
 checks pass. SDK packages and the standalone SDK remain unchanged and compatible.
 
+PFFS v4 is now integrated privately into Pogobios, including file management,
+CRC validation, incremental defrag and the existing 48-byte PFT1 UART protocol.
+The real 4 KiB erase backend is mandatory. Boot and command entry never format
+implicitly; only `format YES` does. Native commands and a 160-byte console retain
+history/completion, service timeouts during partial input, reject excess input,
+and serialize file work against other commands and IR upload entry. The layout
+and public SDK API are unchanged. The NOR suites, full/minimal console tests,
+and 19 host-client transfer tests pass with LTO and fatal sanitizers; existing
+IR/API suites and all 18 IR Python tests pass. User testing confirmed the earlier
+LTO installer works on one robot; the new PFFS operations still need hardware
+validation, including persistence across reboot and firmware upload.
+Robot/bootloader binaries are 86,732 bytes with 74 commands; the remote
+is 75,572 bytes with 75 commands. Robot static SRAM use is 103,240 bytes,
+leaving 27,832 bytes for stack/runtime work.
+
 ## Current decisions
 
 - Measure coded and uncoded timing and completion on hardware before changing
@@ -250,5 +267,5 @@ decoder and LED changes still need a hardware trial.
    results for pages 0, 255, 256, 1791, 1792, and 5887.
 5. Program one test robot and each remote type from the API v2.7.1 package,
    then verify the reported version and repeat the upload and flash tests.
-6. Validate the refreshed LTO installer images on hardware, including console
-   commands, sensor/SPI access, and IR upload timing, before a stable release.
+6. Validate the refreshed installer images on hardware, including PFFS UART
+   operations, persistence across reboot/firmware upload, and IR upload timing.

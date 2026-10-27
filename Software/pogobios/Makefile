@@ -27,6 +27,15 @@ OBJECTS = \
 		$(PB_BD)/crc32.o					\
 		$(PB_BD)/system.o					\
 		$(PB_BD)/spiflash.o					\
+		$(PB_BD)/console_input.o                 \
+		$(PB_BD)/cmd_pffs.o                      \
+		$(PB_BD)/flash_file_read.o               \
+		$(PB_BD)/flash_file_secure.o             \
+		$(PB_BD)/flash_file_name.o               \
+		$(PB_BD)/flash_file_write.o              \
+		$(PB_BD)/flash_file_status.o             \
+		$(PB_BD)/flash_log.o                     \
+		$(PB_BD)/transfer.o                      \
 		$(PB_BD)/main.o	
 
 ifneq "$(or $(TERM_NO_COMPLETE),$(TERM_MINI))" ""
@@ -58,6 +67,12 @@ all: $(PB_BD)/pogobios.bin
 
 # Compiler-option changes in this Makefile must rebuild existing objects.
 $(OBJECTS): Makefile
+
+# LiteX completion must use the same enlarged line size as our local editor.
+$(PB_BD)/complete.o: CFLAGS += -include $(POGOBIOS_DIR)/readline.h
+
+# Select real 4 KiB NOR erases, never the upstream simulator's page emulation.
+$(PB_BD)/flash_file_write.o: CFLAGS += -DREAL_ROBOT
 
 pogolib.a:
 	$(MAKE) -C $(POGOLIB_DIR) TARGET=$(TARGET) LTO=$(LTO)
@@ -95,6 +110,9 @@ $(PB_BD)/%.o: $(POGOBIOS_DIR)/%.c
 	$(compile)
 
 $(PB_BD)/%.o: $(POGOBIOS_DIR)/cmds/%.c
+	$(compile)
+
+$(PB_BD)/%.o: $(POGOBIOS_DIR)/pffs/%.c
 	$(compile)
 
 $(PB_BD)/%.o: $(BIOS_DIRECTORY)/%.c
