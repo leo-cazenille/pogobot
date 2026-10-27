@@ -387,6 +387,13 @@ static void file_service_rx(void) {
     upload_stats.erase_us += elapsed;
     if (elapsed > upload_stats.erase_max_us) upload_stats.erase_max_us = elapsed;
     pogobot_infrared_update();
+    /* The sender is still in its size-dependent preparation allowance. Drain
+     * redundant STARTs rather than fill the message queue over many erases.
+     * Early payloads cannot be written until this extent is fully erased. */
+    while (pogobot_infrared_message_available()) {
+        message_t ignored;
+        pogobot_infrared_recover_next_message(&ignored);
+    }
     rgb_blink();
     pogobot_stopwatch_reset(&file_erase_timer);
 }

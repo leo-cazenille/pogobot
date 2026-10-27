@@ -232,12 +232,20 @@ static void test_file_discovery_and_malformed_packets(void) {
     reset_messages(); CHECK(file_count < MAX_MESSAGES);
     memcpy(messages, file_frames + 1u, (file_count - 1u) * sizeof(message_t));
     message_count = file_count - 1u;
+    /* Preparation completes during the initial frame handler. Real senders
+     * keep DATA off the wire until after it; release queued frames afterward. */
+    message_release_us = 2000u;
     for (unsigned i = 0; i < message_count; ++i) {
         struct sfl_frame *f = (struct sfl_frame *)messages[i].payload;
         if (f->cmd == IR_FILE_DATA) { f->crc[0] ^= 1u; break; }
     }
     CHECK(ir_boot_try_v2_start(&file_frames[0])); verified(1101u, 1u);
     CHECK(upload_stats.crc_errors == 1u && upload_stats.fec_recovered == 1u);
+    receiver(); reset_messages();
+    memcpy(messages, file_frames, 3u * sizeof(message_t)); message_count = 3u;
+    apply(&file_frames[0]);
+    CHECK(message_read == message_count && ir_file_busy());
+    reset_messages(); replay(0u, true); verified(1101u, 1u);
     receiver();
     for (unsigned bad = 0; bad < 7u; ++bad) {
         message_t m = file_frames[0];
